@@ -18,6 +18,8 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+const CIRCUITDIGEST_API_KEY = process.env.CIRCUITDIGEST_API_KEY;
+const CIRCUITDIGEST_PHONE_NUMBER = process.env.CIRCUITDIGEST_PHONE_NUMBER;
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -60,6 +62,8 @@ async function uploadImage(filePath) {
   return result.secure_url;
 }
 
+// Uploads a raw image buffer (instead of a local file path).
+// This is what the real ESP32 photo (or harness test photo) will use.
 async function uploadImageBuffer(buffer) {
   const base64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
   const result = await cloudinary.uploader.upload(base64, {
@@ -68,26 +72,51 @@ async function uploadImageBuffer(buffer) {
   return result.secure_url;
 }
 
-// DEBUG VERSION — prints exactly what Firestore returns so we can see
-// where this is breaking.
+// Reads the user's last known GPS location (written by the Flutter app,
+// later). For now, returns a Firestore GeoPoint from a manually-faked doc.
 async function getLastKnownLocation(userId) {
-  console.log('--- LOCATION DEBUG START ---');
-  console.log('Querying users collection for doc ID:', JSON.stringify(userId));
-
   const userDoc = await db.collection('users').doc(userId).get();
-  console.log('Doc exists?', userDoc.exists);
+  if (!userDoc.exists) return null;
+  return userDoc.data().lastKnownLocation || null;
+}
 
-  if (!userDoc.exists) {
-    console.log('--- LOCATION DEBUG END (no doc found) ---');
-    return null;
+// Sends a WhatsApp alert via CircuitDigest Cloud using the
+// "image_capture_alert" template. The template only supports fixed text
+// variables (no native image attachment), so we embed the Cloudinary
+// image link as text inside event_type, and a Google Maps link inside
+// location.
+async function sendWhatsAppAlert({ imageUrl, location, timestamp }) {
+  const mapsLink = location
+    ? `https://maps.google.com/?q=${location.latitude},${location.longitude}`
+    : 'Location unavailable';
+
+  const payload = {
+    phone_number: CIRCUITDIGEST_PHONE_NUMBER,
+    template_id: 'image_capture_alert',
+    variables: {
+      event_type: `SOS Triggered - Photo: ${imageUrl}`,
+      location: mapsLink,
+      device_name: 'SheAlert',
+      captured_time: timestamp,
+    },
+  };
+
+  const res = await fetch('https://www.circuitdigest.cloud/api/v1/whatsapp/send', {
+    method: 'POST',
+    headers: {
+      'X-API-Key': CIRCUITDIGEST_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    console.error('CircuitDigest error:', data);
+    throw new Error(data.message || 'WhatsApp alert failed');
   }
-
-  const data = userDoc.data();
-  console.log('Full doc data:', JSON.stringify(data));
-  console.log('lastKnownLocation field:', data.lastKnownLocation);
-  console.log('--- LOCATION DEBUG END ---');
-
-  return data.lastKnownLocation || null;
+  console.log('WhatsApp alert sent:', data);
+  return data;
 }
 
 exports.processAudio = functions.https.onRequest(async (req, res) => {
@@ -107,8 +136,12 @@ exports.processAudio = functions.https.onRequest(async (req, res) => {
       return res.json({ transcript, triggered });
     }
 
+    // Trigger detected. No image yet — the device (or harness, for now)
+    // sends the photo in a SEPARATE request to uploadPhoto below.
+    // imageUrl stays null until that happens, so status: 'pending_photo'
+    // is actually true at the moment this doc is created.
     const location = await getLastKnownLocation('testuser1');
-    console.log('Final location value:', location ? `${location.latitude}, ${location.longitude}` : null);
+    console.log('Location fetched:', location ? `${location.latitude}, ${location.longitude}` : null);
 
     const alertDoc = await db.collection('alerts').add({
       transcript,
@@ -136,6 +169,9 @@ exports.processAudio = functions.https.onRequest(async (req, res) => {
   }
 });
 
+// Step 2 of the pipeline. Called separately, once the photo is actually
+// available — later this will be the ESP32 POSTing its captured image.
+// Requires the alertId so we know which Firestore doc to update.
 exports.uploadPhoto = functions.https.onRequest(async (req, res) => {
   try {
     const alertId = req.query.alertId;
@@ -162,6 +198,18 @@ exports.uploadPhoto = functions.https.onRequest(async (req, res) => {
       imageUrl,
       status: 'complete',
     });
+
+    // Fire the WhatsApp alert now that photo + location + timestamp are ready
+    try {
+      await sendWhatsAppAlert({
+        imageUrl,
+        location: alertSnap.data().location,
+        timestamp: new Date().toLocaleString(),
+      });
+    } catch (alertErr) {
+      console.error('Failed to send WhatsApp alert:', alertErr.message);
+      // Don't fail the whole request just because the alert send failed
+    }
 
     return res.json({ alertId, imageUrl, status: 'complete' });
   } catch (err) {
