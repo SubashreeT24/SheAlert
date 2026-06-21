@@ -1,8 +1,9 @@
+require('dotenv').config();
 const functions = require('firebase-functions');
 const fetch = require('node-fetch');
-const FormData = require('form-data');
+const FormData = require('form-data');tou
 
-const ELEVENLABS_API_KEY = 'sk_3bb1249f460b704b316e7ba69756f84a37d9dc1e993de480';
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 
 function detectTrigger(transcript, triggerWord = 'blueberry') {
   const text = transcript.toLowerCase();
