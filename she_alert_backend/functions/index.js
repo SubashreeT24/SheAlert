@@ -1,7 +1,7 @@
 require('dotenv').config();
 const functions = require('firebase-functions');
 const fetch = require('node-fetch');
-const FormData = require('form-data');tou
+const FormData = require('form-data');
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 

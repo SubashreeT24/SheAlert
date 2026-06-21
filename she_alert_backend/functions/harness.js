@@ -8,7 +8,8 @@ async function simulateDevice() {
     headers: { 'Content-Type': 'audio/wav' },
     body: audio,
   });
-  console.log(await res.json());
+  const text = await res.text();
+  console.log(text);
 }
 
 simulateDevice();
