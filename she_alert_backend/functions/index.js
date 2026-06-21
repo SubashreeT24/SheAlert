@@ -60,14 +60,34 @@ async function uploadImage(filePath) {
   return result.secure_url;
 }
 
-// Uploads a raw image buffer (instead of a local file path).
-// This is what the real ESP32 photo (or harness test photo) will use.
 async function uploadImageBuffer(buffer) {
   const base64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
   const result = await cloudinary.uploader.upload(base64, {
     folder: 'shealert',
   });
   return result.secure_url;
+}
+
+// DEBUG VERSION — prints exactly what Firestore returns so we can see
+// where this is breaking.
+async function getLastKnownLocation(userId) {
+  console.log('--- LOCATION DEBUG START ---');
+  console.log('Querying users collection for doc ID:', JSON.stringify(userId));
+
+  const userDoc = await db.collection('users').doc(userId).get();
+  console.log('Doc exists?', userDoc.exists);
+
+  if (!userDoc.exists) {
+    console.log('--- LOCATION DEBUG END (no doc found) ---');
+    return null;
+  }
+
+  const data = userDoc.data();
+  console.log('Full doc data:', JSON.stringify(data));
+  console.log('lastKnownLocation field:', data.lastKnownLocation);
+  console.log('--- LOCATION DEBUG END ---');
+
+  return data.lastKnownLocation || null;
 }
 
 exports.processAudio = functions.https.onRequest(async (req, res) => {
@@ -87,20 +107,26 @@ exports.processAudio = functions.https.onRequest(async (req, res) => {
       return res.json({ transcript, triggered });
     }
 
-    // Trigger detected. No image yet — the device (or harness, for now)
-    // sends the photo in a SEPARATE request to uploadPhoto below.
-    // imageUrl stays null until that happens, so status: 'pending_photo'
-    // is actually true at the moment this doc is created.
+    const location = await getLastKnownLocation('testuser1');
+    console.log('Final location value:', location ? `${location.latitude}, ${location.longitude}` : null);
+
     const alertDoc = await db.collection('alerts').add({
       transcript,
       triggered,
       imageUrl: null,
+      location,
       status: 'pending_photo',
       timestamp: FieldValue.serverTimestamp(),
     });
     console.log('Alert written with ID:', alertDoc.id);
 
-    return res.json({ transcript, triggered, imageUrl: null, alertId: alertDoc.id });
+    return res.json({
+      transcript,
+      triggered,
+      imageUrl: null,
+      location: location ? { lat: location.latitude, lng: location.longitude } : null,
+      alertId: alertDoc.id,
+    });
   } catch (err) {
     console.error('processAudio error:', err);
     return res.status(500).json({
@@ -110,9 +136,6 @@ exports.processAudio = functions.https.onRequest(async (req, res) => {
   }
 });
 
-// Step 2 of the pipeline. Called separately, once the photo is actually
-// available — later this will be the ESP32 POSTing its captured image.
-// Requires the alertId so we know which Firestore doc to update.
 exports.uploadPhoto = functions.https.onRequest(async (req, res) => {
   try {
     const alertId = req.query.alertId;
