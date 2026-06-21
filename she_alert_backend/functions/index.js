@@ -74,6 +74,10 @@ async function uploadImageBuffer(buffer) {
 
 // Reads the user's last known GPS location (written by the Flutter app,
 // later). For now, returns a Firestore GeoPoint from a manually-faked doc.
+// NOTE: collection name is lowercase "users" — must match Firestore data
+// exactly (Firestore collection names are case-sensitive). If you seed
+// test data via the Emulator UI, make sure it's created under "users",
+// not "Users".
 async function getLastKnownLocation(userId) {
   const userDoc = await db.collection('users').doc(userId).get();
   if (!userDoc.exists) return null;
@@ -204,7 +208,7 @@ exports.uploadPhoto = functions.https.onRequest(async (req, res) => {
       await sendWhatsAppAlert({
         imageUrl,
         location: alertSnap.data().location,
-        timestamp: new Date().toLocaleString(),
+        timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
       });
     } catch (alertErr) {
       console.error('Failed to send WhatsApp alert:', alertErr.message);
