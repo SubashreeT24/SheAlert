@@ -20,14 +20,12 @@ class EmergencyContact {
   final String id;
   final String name;
   final String phone;
-  final Color color;
   final int priority;
  
   const EmergencyContact({
     required this.id,
     required this.name,
     required this.phone,
-    required this.color,
     required this.priority,
   });
  
@@ -52,7 +50,6 @@ class EmergencyContact {
         id: doc.id,
         name: (data['name'] as String?)?.trim() ?? '',
         phone: (data['phoneNumber'] as String?)?.trim() ?? '',
-        color: Color((data['colorValue'] as int?) ?? 0xFFFFB300),
         priority: (data['priority'] as int?) ?? 0,
       );
     } catch (_) {
@@ -84,18 +81,38 @@ class ContactsRepository {
   }
  
   Future<void> add(String name, String phone, int priority) async {
-    final color = contactColors[(priority - 1) % contactColors.length];
     await _ref.add({
       'name': name,
       'phoneNumber': phone,
       'priority': priority,
-      'colorValue': color.value,
       'createdAt': FieldValue.serverTimestamp(), // useful for debugging
     });
   }
  
   Future<void> delete(String id) async {
     await _ref.doc(id).delete();
+    await _normalizePriorities();
+  }
+ 
+  Future<void> _normalizePriorities() async {
+    final snapshot = await _ref.orderBy('priority').get();
+    final batch = FirebaseFirestore.instance.batch();
+    var hasChanges = false;
+
+    for (var i = 0; i < snapshot.docs.length; i++) {
+      final doc = snapshot.docs[i];
+      final data = doc.data() as Map<String, dynamic>?;
+      final priority = (data?['priority'] as int?) ?? i + 1;
+      final expectedPriority = i + 1;
+      if (priority != expectedPriority) {
+        batch.update(doc.reference, {'priority': expectedPriority});
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges) {
+      await batch.commit();
+    }
   }
  
   /// Batch-update all priorities in one round-trip
@@ -350,6 +367,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         key: ValueKey(c.id),
                         contact: c,
                         index: index,
+                        color: contactColors[index % contactColors.length],
                         onDelete: () => _confirmDelete(c),
                       );
                     },
@@ -398,11 +416,13 @@ class _ContactTile extends StatelessWidget {
     super.key,
     required this.contact,
     required this.index,
+    required this.color,
     required this.onDelete,
   });
  
   final EmergencyContact contact;
   final int index;
+  final Color color;
   final VoidCallback onDelete;
  
   @override
@@ -435,7 +455,7 @@ class _ContactTile extends StatelessWidget {
             const SizedBox(width: 8),
             // Avatar with initials
             CircleAvatar(
-              backgroundColor: contact.color,
+              backgroundColor: color,
               child: Text(
                 contact.initials,
                 style: const TextStyle(
