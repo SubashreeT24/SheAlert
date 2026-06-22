@@ -17,13 +17,19 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const storage = admin.storage();
 
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || functions.config().elevenlabs.key;
-const CIRCUITDIGEST_API_KEY = process.env.CIRCUITDIGEST_API_KEY || functions.config().circuitdigest.key;
+const ELEVENLABS_API_KEY =
+  process.env.ELEVENLABS_API_KEY || functions.config().elevenlabs.key;
+const CIRCUITDIGEST_API_KEY =
+  process.env.CIRCUITDIGEST_API_KEY || functions.config().circuitdigest.key;
 
 const EMERGENCY_CONTACTS = [
   process.env.CIRCUITDIGEST_PHONE_NUMBER_1 || functions.config().circuitdigest.phone1,
   process.env.CIRCUITDIGEST_PHONE_NUMBER_2 || functions.config().circuitdigest.phone2,
 ];
+
+// ─────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────
 
 function detectTrigger(transcript, triggerWord = 'blueberry') {
   const text = transcript.toLowerCase();
@@ -66,7 +72,8 @@ async function uploadImageBuffer(buffer, alertId) {
   });
 
   await file.makePublic();
-  const publicUrl = 'https://storage.googleapis.com/' + bucket.name + '/' + fileName;
+  const publicUrl =
+    'https://storage.googleapis.com/' + bucket.name + '/' + fileName;
   return publicUrl;
 }
 
@@ -76,16 +83,24 @@ async function getLastKnownLocation(userId) {
   return userDoc.data().lastKnownLocation || null;
 }
 
-async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber }) {
-  const mapsLink = location
-    ? 'https://maps.google.com/?q=' + location.latitude + ',' + location.longitude
-    : 'Location unavailable';
+async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, alertType }) {
+  const mapsLink =
+    location
+      ? 'https://maps.google.com/?q=' + location.latitude + ',' + location.longitude
+      : 'Location unavailable';
+
+  const eventType =
+    alertType === 'manual'
+      ? 'SOS Triggered Manually'
+      : imageUrl
+      ? 'SOS Triggered - Photo: ' + imageUrl
+      : 'SOS Triggered - No photo';
 
   const payload = {
     phone_number: phoneNumber,
     template_id: 'image_capture_alert',
     variables: {
-      event_type: 'SOS Triggered - Photo: ' + imageUrl,
+      event_type: eventType,
       location: mapsLink,
       device_name: 'SheAlert',
       captured_time: timestamp,
@@ -110,21 +125,96 @@ async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber })
   return data;
 }
 
-async function sendAlertToAllContacts({ imageUrl, location, timestamp }) {
+async function sendAlertToAllContacts({ imageUrl, location, timestamp, alertType }) {
   const results = await Promise.allSettled(
-    EMERGENCY_CONTACTS.filter(Boolean).map(function(phoneNumber) {
-      return sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber });
+    EMERGENCY_CONTACTS.filter(Boolean).map(function (phoneNumber) {
+      return sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, alertType });
     })
   );
 
-  results.forEach(function(result, i) {
-    if (result.status === 'rejected') {
+  let successCount = 0;
+  results.forEach(function (result, i) {
+    if (result.status === 'fulfilled') {
+      successCount++;
+    } else {
       console.error('Failed to alert contact ' + (i + 1) + ':', result.reason);
     }
   });
+
+  return successCount;
 }
 
-exports.processAudio = onRequest(async function(req, res) {
+// ─────────────────────────────────────────────
+//  1. MANUAL ALERT  (SOS hold button in app)
+// ─────────────────────────────────────────────
+
+exports.manualAlert = onRequest(async function (req, res) {
+  try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    const { userId, location } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing userId in request body' });
+    }
+
+    console.log('Manual SOS triggered by userId:', userId);
+    console.log('Location:', location || 'not provided — will fetch from Firestore');
+
+    // Use provided location or fall back to last known from Firestore
+    let resolvedLocation = location || null;
+    if (!resolvedLocation) {
+      resolvedLocation = await getLastKnownLocation(userId);
+      console.log('Fetched last known location:', resolvedLocation);
+    }
+
+    const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+    // Save alert to Firestore
+    const alertDoc = await db.collection('alerts').add({
+      userId,
+      type: 'manual',
+      triggered: true,
+      imageUrl: null,
+      location: resolvedLocation,
+      status: 'sent',
+      timestamp: FieldValue.serverTimestamp(),
+    });
+
+    console.log('Manual alert saved with ID:', alertDoc.id);
+
+    // Send WhatsApp to all emergency contacts
+    const sent = await sendAlertToAllContacts({
+      imageUrl: null,
+      location: resolvedLocation,
+      timestamp,
+      alertType: 'manual',
+    });
+
+    return res.json({
+      success: true,
+      alertId: alertDoc.id,
+      sent,
+      message: sent > 0
+        ? 'Alert sent to ' + sent + ' contact(s)'
+        : 'Alert saved but no contacts were notified',
+    });
+  } catch (err) {
+    console.error('manualAlert error:', err);
+    return res.status(500).json({
+      error: err.message || 'Unknown error',
+      details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  2. PROCESS AUDIO  (automatic voice trigger)
+// ─────────────────────────────────────────────
+
+exports.processAudio = onRequest(async function (req, res) {
   try {
     console.log('Body size:', req.rawBody ? req.rawBody.length : 'no body received');
 
@@ -142,9 +232,14 @@ exports.processAudio = onRequest(async function(req, res) {
     }
 
     const location = await getLastKnownLocation('testuser1');
-    console.log('Location fetched:', location ? (location.latitude + ', ' + location.longitude) : null);
+    console.log(
+      'Location fetched:',
+      location ? location.latitude + ', ' + location.longitude : null
+    );
 
     const alertDoc = await db.collection('alerts').add({
+      userId: 'testuser1',
+      type: 'automatic',
       transcript,
       triggered,
       imageUrl: null,
@@ -152,13 +247,16 @@ exports.processAudio = onRequest(async function(req, res) {
       status: 'pending_photo',
       timestamp: FieldValue.serverTimestamp(),
     });
-    console.log('Alert written with ID:', alertDoc.id);
+
+    console.log('Automatic alert written with ID:', alertDoc.id);
 
     return res.json({
       transcript,
       triggered,
       imageUrl: null,
-      location: location ? { lat: location.latitude, lng: location.longitude } : null,
+      location: location
+        ? { lat: location.latitude, lng: location.longitude }
+        : null,
       alertId: alertDoc.id,
     });
   } catch (err) {
@@ -170,7 +268,11 @@ exports.processAudio = onRequest(async function(req, res) {
   }
 });
 
-exports.uploadPhoto = onRequest(async function(req, res) {
+// ─────────────────────────────────────────────
+//  3. UPLOAD PHOTO  (called after voice trigger)
+// ─────────────────────────────────────────────
+
+exports.uploadPhoto = onRequest(async function (req, res) {
   try {
     const alertId = req.query.alertId;
 
@@ -202,6 +304,7 @@ exports.uploadPhoto = onRequest(async function(req, res) {
         imageUrl,
         location: alertSnap.data().location,
         timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+        alertType: 'automatic',
       });
     } catch (alertErr) {
       console.error('Failed to send some WhatsApp alerts:', alertErr.message);
