@@ -2,7 +2,6 @@ require('dotenv').config();
 
 const { onRequest } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
-const functions = require('firebase-functions');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const admin = require('firebase-admin');
@@ -17,34 +16,22 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const storage = admin.storage();
 
-const ELEVENLABS_API_KEY =
-  process.env.ELEVENLABS_API_KEY || functions.config().elevenlabs.key;
-const CIRCUITDIGEST_API_KEY =
-  process.env.CIRCUITDIGEST_API_KEY || functions.config().circuitdigest.key;
-
-const EMERGENCY_CONTACTS = [
-  process.env.CIRCUITDIGEST_PHONE_NUMBER_1 || functions.config().circuitdigest.phone1,
-  process.env.CIRCUITDIGEST_PHONE_NUMBER_2 || functions.config().circuitdigest.phone2,
-];
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+const CIRCUITDIGEST_API_KEY = process.env.CIRCUITDIGEST_API_KEY;
 
 // ─────────────────────────────────────────────
 //  HELPERS
 // ─────────────────────────────────────────────
 
-// FIX 1: Removed helpCount fallback — too easy to false-trigger in any language.
-// Only the explicit trigger word fires the alert.
 function detectTrigger(transcript, triggerWord = 'blueberry') {
   return transcript.toLowerCase().includes(triggerWord.toLowerCase());
 }
 
-// FIX 2: Added language: 'en' so Scribe always transcribes in English.
-// This ensures the trigger word (English) is always recognised correctly
-// regardless of what other language the user is speaking around it.
 async function transcribeAudio(audioBuffer) {
   const form = new FormData();
   form.append('file', audioBuffer, { filename: 'audio.wav' });
   form.append('model_id', 'scribe_v1');
-  form.append('language', 'en'); // Force English transcription for reliable trigger detection
+  form.append('language', 'en');
 
   const res = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
     method: 'POST',
@@ -84,6 +71,26 @@ async function getLastKnownLocation(userId) {
   const userDoc = await db.collection('users').doc(userId).get();
   if (!userDoc.exists) return null;
   return userDoc.data().lastKnownLocation || null;
+}
+
+async function getContactPhones(userId) {
+  const snap = await db
+    .collection('users')
+    .doc(userId)
+    .collection('contacts')
+    .orderBy('priority')
+    .get();
+
+  const phones = [];
+  snap.forEach((doc) => {
+    const phone = doc.data().phoneNumber;
+    if (phone && phone.trim().length >= 7) {
+      phones.push(phone.trim());
+    }
+  });
+
+  console.log(`Found ${phones.length} contacts for user ${userId}:`, phones);
+  return phones;
 }
 
 async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, alertType }) {
@@ -128,12 +135,14 @@ async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, a
   return data;
 }
 
-// FIX 3: Sequential sending with 12s delay between contacts.
-// CircuitDigest rate limit is ~9.3–9.4s so 12s gives a safe buffer.
-// Previously used Promise.allSettled which fired all at once and hit the rate limit.
-async function sendAlertToAllContacts({ imageUrl, location, timestamp, alertType }) {
-  const contacts = EMERGENCY_CONTACTS.filter(Boolean);
+async function sendAlertToAllContacts({ userId, imageUrl, location, timestamp, alertType }) {
+  const contacts = await getContactPhones(userId);
   let successCount = 0;
+
+  if (contacts.length === 0) {
+    console.warn(`Found 0 contacts for user ${userId} — no WhatsApp messages sent.`);
+    return successCount;
+  }
 
   for (let i = 0; i < contacts.length; i++) {
     try {
@@ -165,7 +174,7 @@ async function sendAlertToAllContacts({ imageUrl, location, timestamp, alertType
 // ─────────────────────────────────────────────
 
 exports.manualAlert = onRequest(
-  { timeoutSeconds: 60, region: 'asia-southeast1' },
+  { timeoutSeconds: 90 },
   async function (req, res) {
     try {
       if (req.method !== 'POST') {
@@ -181,7 +190,6 @@ exports.manualAlert = onRequest(
       console.log('Manual SOS triggered by userId:', userId);
       console.log('Location:', location || 'not provided — will fetch from Firestore');
 
-      // Use provided location or fall back to last known from Firestore
       let resolvedLocation = location || null;
       if (!resolvedLocation) {
         resolvedLocation = await getLastKnownLocation(userId);
@@ -190,7 +198,6 @@ exports.manualAlert = onRequest(
 
       const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
-      // Save alert to Firestore
       const alertDoc = await db.collection('alerts').add({
         userId,
         type: 'manual',
@@ -203,8 +210,8 @@ exports.manualAlert = onRequest(
 
       console.log('Manual alert saved with ID:', alertDoc.id);
 
-      // Send WhatsApp to all emergency contacts
       const sent = await sendAlertToAllContacts({
+        userId,
         imageUrl: null,
         location: resolvedLocation,
         timestamp,
@@ -233,11 +240,8 @@ exports.manualAlert = onRequest(
 //  2. PROCESS AUDIO  (automatic voice trigger)
 // ─────────────────────────────────────────────
 
-// FIX 4: userId and location now read from query params instead of hardcoded.
-// Raw audio bytes still go in the request body (req.rawBody).
-// Flutter app must call: POST /processAudio?userId=abc123&lat=12.9&lng=80.2
 exports.processAudio = onRequest(
-  { timeoutSeconds: 60, region: 'asia-southeast1' },
+  { timeoutSeconds: 60 },
   async function (req, res) {
     try {
       console.log('Body size:', req.rawBody ? req.rawBody.length : 'no body received');
@@ -246,7 +250,6 @@ exports.processAudio = onRequest(
         return res.status(400).json({ error: 'No audio data received in request body' });
       }
 
-      // Read userId and optional location from query params
       const userId = req.query.userId;
       const lat = req.query.lat ? parseFloat(req.query.lat) : null;
       const lng = req.query.lng ? parseFloat(req.query.lng) : null;
@@ -264,7 +267,6 @@ exports.processAudio = onRequest(
         return res.json({ transcript, triggered });
       }
 
-      // Use location from query params if provided, else fetch from Firestore
       let location = (lat && lng) ? { latitude: lat, longitude: lng } : null;
       if (!location) {
         location = await getLastKnownLocation(userId);
@@ -276,7 +278,7 @@ exports.processAudio = onRequest(
       );
 
       const alertDoc = await db.collection('alerts').add({
-        userId,           // real userId — app will now see this alert
+        userId,
         type: 'automatic',
         transcript,
         triggered,
@@ -312,7 +314,7 @@ exports.processAudio = onRequest(
 // ─────────────────────────────────────────────
 
 exports.uploadPhoto = onRequest(
-  { timeoutSeconds: 60, region: 'asia-southeast1' },
+  { timeoutSeconds: 90 },
   async function (req, res) {
     try {
       const alertId = req.query.alertId;
@@ -341,9 +343,11 @@ exports.uploadPhoto = onRequest(
       });
 
       try {
+        const alertData = alertSnap.data();
         await sendAlertToAllContacts({
+          userId: alertData.userId,
           imageUrl,
-          location: alertSnap.data().location,
+          location: alertData.location,
           timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
           alertType: 'automatic',
         });
