@@ -31,7 +31,7 @@ class AlertEntry {
       // ── type ──────────────────────────────────────
       final typeStr = (data['type'] as String?) ?? 'manual';
       final alertType =
-          typeStr == 'auto' ? AlertType.auto : AlertType.manual;
+          typeStr == 'automatic' ? AlertType.auto : AlertType.manual;  // ← FIXED: 'automatic' not 'auto'
 
       // ── title / transcript ────────────────────────
       String title;
