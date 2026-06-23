@@ -36,7 +36,6 @@ class _HomeScreenState extends State<HomeScreen> {
   double _holdProgress = 0.0;
   bool _isSendingAlert = false;
 
-  // ── Firestore stream for contact count ────────
   late final Stream<int> _contactCountStream;
 
   @override
@@ -80,7 +79,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentLat = pos.latitude;
       _currentLng = pos.longitude;
 
-      // Update Firestore so cloud functions can fall back to it
       try {
         await FirebaseFirestore.instance
             .collection('users')
@@ -119,8 +117,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return "${diff.inMinutes} min ago";
   }
 
-  // ── Hold logic ────────────────────────────────
-
   void _onHoldStart() {
     if (_isSendingAlert) return;
     setState(() {
@@ -131,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const interval = Duration(milliseconds: 50);
     _holdTimer = Timer.periodic(interval, (timer) {
       setState(() {
-        _holdProgress += 50 / 2000; // fills in 2 seconds
+        _holdProgress += 50 / 2000;
       });
 
       if (_holdProgress >= 1.0) {
@@ -152,8 +148,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // ── Trigger alert → call Cloud Function ──────
-
   Future<void> _triggerAlert() async {
     if (_isSendingAlert) return;
 
@@ -162,6 +156,25 @@ class _HomeScreenState extends State<HomeScreen> {
       _holdProgress = 0.0;
       _isSendingAlert = true;
     });
+
+    // Check contacts first — abort early if none
+    final contactSnap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUserId)
+        .collection('contacts')
+        .get();
+
+    if (contactSnap.docs.isEmpty) {
+      if (mounted) {
+        setState(() => _isSendingAlert = false);
+        _showErrorSnackbar(
+            'No contacts found. Please add emergency contacts first.');
+      }
+      return;
+    }
+
+    // Show optimistic dialog immediately
+    if (mounted) _showSendingDialog();
 
     try {
       final body = <String, dynamic>{'userId': currentUserId};
@@ -181,12 +194,15 @@ class _HomeScreenState extends State<HomeScreen> {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 20));
+          .timeout(const Duration(seconds: 70));
 
       debugPrint('Response status: ${response.statusCode}');
       debugPrint('Response body: ${response.body}');
 
       if (!mounted) return;
+
+      // Close the sending dialog
+      Navigator.of(context, rootNavigator: true).pop();
 
       if (response.statusCode == 200) {
         final respBody = jsonDecode(response.body) as Map<String, dynamic>;
@@ -194,30 +210,64 @@ class _HomeScreenState extends State<HomeScreen> {
         final message = respBody['message'] as String? ?? 'Alert sent';
         _showSuccessDialog(sent: sent as int, message: message);
       } else {
-        // Try to parse error details from the response
         String errorMessage = 'Unknown error (${response.statusCode})';
         try {
           final respBody = jsonDecode(response.body) as Map<String, dynamic>;
-          errorMessage = respBody['error'] ?? respBody['message'] ?? errorMessage;
+          errorMessage =
+              respBody['error'] ?? respBody['message'] ?? errorMessage;
         } catch (_) {
           errorMessage = 'Status ${response.statusCode}: ${response.body}';
         }
         _showErrorSnackbar('Alert failed: $errorMessage');
       }
     } on TimeoutException {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       _showErrorSnackbar('Request timed out. Check your connection.');
     } on http.ClientException catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       _showErrorSnackbar('Network error: ${e.message}');
     } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       _showErrorSnackbar('Could not send alert: $e');
     } finally {
-      if (mounted) {
-        setState(() => _isSendingAlert = false);
-      }
+      if (mounted) setState(() => _isSendingAlert = false);
     }
   }
 
-  // ── Dialogs & snackbars ───────────────────────
+  void _showSendingDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cardBg,
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red),
+            SizedBox(width: 8),
+            Text(
+              '🚨 Sending Alert...',
+              style: TextStyle(color: Colors.white),
+            ),
+          ],
+        ),
+        content: const Row(
+          children: [
+            CircularProgressIndicator(
+              color: AppColors.teal,
+              strokeWidth: 2.5,
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                'Sending emergency alert to your contacts via WhatsApp. This may take up to a minute.',
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _showSuccessDialog({int sent = 0, String message = ''}) {
     showDialog(
@@ -258,7 +308,7 @@ class _HomeScreenState extends State<HomeScreen> {
       SnackBar(
         content: Text(message),
         backgroundColor: Colors.redAccent,
-        duration: const Duration(seconds: 6), // longer so you can read it
+        duration: const Duration(seconds: 6),
       ),
     );
   }
@@ -270,8 +320,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _holdTimer?.cancel();
     super.dispose();
   }
-
-  // ── Build ─────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -300,7 +348,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
             const SizedBox(height: 16),
 
-            // ── Info tiles — contacts count from Firestore ──
             Row(
               children: [
                 Expanded(
@@ -328,7 +375,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 20),
 
-            // ── Emergency button ──
             connected
                 ? GestureDetector(
                     onLongPressStart: (_) => _onHoldStart(),
@@ -383,7 +429,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
 
-                        // Progress overlay while holding
                         if (_isHolding)
                           Positioned.fill(
                             child: ClipRRect(
