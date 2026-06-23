@@ -31,17 +31,20 @@ const EMERGENCY_CONTACTS = [
 //  HELPERS
 // ─────────────────────────────────────────────
 
+// FIX 1: Removed helpCount fallback — too easy to false-trigger in any language.
+// Only the explicit trigger word fires the alert.
 function detectTrigger(transcript, triggerWord = 'blueberry') {
-  const text = transcript.toLowerCase();
-  const triggerHit = text.includes(triggerWord.toLowerCase());
-  const helpCount = (text.match(/\bhelp\b/g) || []).length;
-  return triggerHit || helpCount >= 2;
+  return transcript.toLowerCase().includes(triggerWord.toLowerCase());
 }
 
+// FIX 2: Added language: 'en' so Scribe always transcribes in English.
+// This ensures the trigger word (English) is always recognised correctly
+// regardless of what other language the user is speaking around it.
 async function transcribeAudio(audioBuffer) {
   const form = new FormData();
   form.append('file', audioBuffer, { filename: 'audio.wav' });
   form.append('model_id', 'scribe_v1');
+  form.append('language', 'en'); // Force English transcription for reliable trigger detection
 
   const res = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
     method: 'POST',
@@ -125,21 +128,34 @@ async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, a
   return data;
 }
 
+// FIX 3: Sequential sending with 12s delay between contacts.
+// CircuitDigest rate limit is ~9.3–9.4s so 12s gives a safe buffer.
+// Previously used Promise.allSettled which fired all at once and hit the rate limit.
 async function sendAlertToAllContacts({ imageUrl, location, timestamp, alertType }) {
-  const results = await Promise.allSettled(
-    EMERGENCY_CONTACTS.filter(Boolean).map(function (phoneNumber) {
-      return sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, alertType });
-    })
-  );
-
+  const contacts = EMERGENCY_CONTACTS.filter(Boolean);
   let successCount = 0;
-  results.forEach(function (result, i) {
-    if (result.status === 'fulfilled') {
+
+  for (let i = 0; i < contacts.length; i++) {
+    try {
+      await sendWhatsAppAlert({
+        imageUrl,
+        location,
+        timestamp,
+        alertType,
+        phoneNumber: contacts[i],
+      });
       successCount++;
-    } else {
-      console.error('Failed to alert contact ' + (i + 1) + ':', result.reason);
+      console.log('WhatsApp alert sent to contact ' + (i + 1) + ' of ' + contacts.length);
+    } catch (err) {
+      console.error('Failed to alert contact ' + (i + 1) + ':', err.message);
     }
-  });
+
+    // Wait 12s before sending to next contact (CircuitDigest rate limit ~9.3–9.4s)
+    if (i < contacts.length - 1) {
+      console.log('Waiting 12s before next contact to respect rate limit...');
+      await new Promise(resolve => setTimeout(resolve, 12000));
+    }
+  }
 
   return successCount;
 }
@@ -148,174 +164,200 @@ async function sendAlertToAllContacts({ imageUrl, location, timestamp, alertType
 //  1. MANUAL ALERT  (SOS hold button in app)
 // ─────────────────────────────────────────────
 
-exports.manualAlert = onRequest(async function (req, res) {
-  try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method not allowed' });
+exports.manualAlert = onRequest(
+  { timeoutSeconds: 60, region: 'asia-southeast1' },
+  async function (req, res) {
+    try {
+      if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
+      }
+
+      const { userId, location } = req.body;
+
+      if (!userId) {
+        return res.status(400).json({ error: 'Missing userId in request body' });
+      }
+
+      console.log('Manual SOS triggered by userId:', userId);
+      console.log('Location:', location || 'not provided — will fetch from Firestore');
+
+      // Use provided location or fall back to last known from Firestore
+      let resolvedLocation = location || null;
+      if (!resolvedLocation) {
+        resolvedLocation = await getLastKnownLocation(userId);
+        console.log('Fetched last known location:', resolvedLocation);
+      }
+
+      const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+      // Save alert to Firestore
+      const alertDoc = await db.collection('alerts').add({
+        userId,
+        type: 'manual',
+        triggered: true,
+        imageUrl: null,
+        location: resolvedLocation,
+        status: 'sent',
+        timestamp: FieldValue.serverTimestamp(),
+      });
+
+      console.log('Manual alert saved with ID:', alertDoc.id);
+
+      // Send WhatsApp to all emergency contacts
+      const sent = await sendAlertToAllContacts({
+        imageUrl: null,
+        location: resolvedLocation,
+        timestamp,
+        alertType: 'manual',
+      });
+
+      return res.json({
+        success: true,
+        alertId: alertDoc.id,
+        sent,
+        message: sent > 0
+          ? 'Alert sent to ' + sent + ' contact(s)'
+          : 'Alert saved but no contacts were notified',
+      });
+    } catch (err) {
+      console.error('manualAlert error:', err);
+      return res.status(500).json({
+        error: err.message || 'Unknown error',
+        details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
+      });
     }
-
-    const { userId, location } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing userId in request body' });
-    }
-
-    console.log('Manual SOS triggered by userId:', userId);
-    console.log('Location:', location || 'not provided — will fetch from Firestore');
-
-    // Use provided location or fall back to last known from Firestore
-    let resolvedLocation = location || null;
-    if (!resolvedLocation) {
-      resolvedLocation = await getLastKnownLocation(userId);
-      console.log('Fetched last known location:', resolvedLocation);
-    }
-
-    const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-
-    // Save alert to Firestore
-    const alertDoc = await db.collection('alerts').add({
-      userId,
-      type: 'manual',
-      triggered: true,
-      imageUrl: null,
-      location: resolvedLocation,
-      status: 'sent',
-      timestamp: FieldValue.serverTimestamp(),
-    });
-
-    console.log('Manual alert saved with ID:', alertDoc.id);
-
-    // Send WhatsApp to all emergency contacts
-    const sent = await sendAlertToAllContacts({
-      imageUrl: null,
-      location: resolvedLocation,
-      timestamp,
-      alertType: 'manual',
-    });
-
-    return res.json({
-      success: true,
-      alertId: alertDoc.id,
-      sent,
-      message: sent > 0
-        ? 'Alert sent to ' + sent + ' contact(s)'
-        : 'Alert saved but no contacts were notified',
-    });
-  } catch (err) {
-    console.error('manualAlert error:', err);
-    return res.status(500).json({
-      error: err.message || 'Unknown error',
-      details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
-    });
   }
-});
+);
 
 // ─────────────────────────────────────────────
 //  2. PROCESS AUDIO  (automatic voice trigger)
 // ─────────────────────────────────────────────
 
-exports.processAudio = onRequest(async function (req, res) {
-  try {
-    console.log('Body size:', req.rawBody ? req.rawBody.length : 'no body received');
+// FIX 4: userId and location now read from query params instead of hardcoded.
+// Raw audio bytes still go in the request body (req.rawBody).
+// Flutter app must call: POST /processAudio?userId=abc123&lat=12.9&lng=80.2
+exports.processAudio = onRequest(
+  { timeoutSeconds: 60, region: 'asia-southeast1' },
+  async function (req, res) {
+    try {
+      console.log('Body size:', req.rawBody ? req.rawBody.length : 'no body received');
 
-    if (!req.rawBody || req.rawBody.length === 0) {
-      return res.status(400).json({ error: 'No audio data received in request body' });
+      if (!req.rawBody || req.rawBody.length === 0) {
+        return res.status(400).json({ error: 'No audio data received in request body' });
+      }
+
+      // Read userId and optional location from query params
+      const userId = req.query.userId;
+      const lat = req.query.lat ? parseFloat(req.query.lat) : null;
+      const lng = req.query.lng ? parseFloat(req.query.lng) : null;
+
+      if (!userId) {
+        return res.status(400).json({ error: 'Missing userId query param' });
+      }
+
+      const transcript = await transcribeAudio(req.rawBody);
+      console.log('Transcript:', transcript);
+
+      const triggered = detectTrigger(transcript);
+
+      if (!triggered) {
+        return res.json({ transcript, triggered });
+      }
+
+      // Use location from query params if provided, else fetch from Firestore
+      let location = (lat && lng) ? { latitude: lat, longitude: lng } : null;
+      if (!location) {
+        location = await getLastKnownLocation(userId);
+      }
+
+      console.log(
+        'Location:',
+        location ? location.latitude + ', ' + location.longitude : 'unavailable'
+      );
+
+      const alertDoc = await db.collection('alerts').add({
+        userId,           // real userId — app will now see this alert
+        type: 'automatic',
+        transcript,
+        triggered,
+        imageUrl: null,
+        location,
+        status: 'pending_photo',
+        timestamp: FieldValue.serverTimestamp(),
+      });
+
+      console.log('Automatic alert written with ID:', alertDoc.id);
+
+      return res.json({
+        transcript,
+        triggered,
+        imageUrl: null,
+        location: location
+          ? { lat: location.latitude, lng: location.longitude }
+          : null,
+        alertId: alertDoc.id,
+      });
+    } catch (err) {
+      console.error('processAudio error:', err);
+      return res.status(500).json({
+        error: err.message || 'Unknown error',
+        details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
+      });
     }
-
-    const transcript = await transcribeAudio(req.rawBody);
-    console.log('Transcript:', transcript);
-
-    const triggered = detectTrigger(transcript);
-
-    if (!triggered) {
-      return res.json({ transcript, triggered });
-    }
-
-    const location = await getLastKnownLocation('testuser1');
-    console.log(
-      'Location fetched:',
-      location ? location.latitude + ', ' + location.longitude : null
-    );
-
-    const alertDoc = await db.collection('alerts').add({
-      userId: 'testuser1',
-      type: 'automatic',
-      transcript,
-      triggered,
-      imageUrl: null,
-      location,
-      status: 'pending_photo',
-      timestamp: FieldValue.serverTimestamp(),
-    });
-
-    console.log('Automatic alert written with ID:', alertDoc.id);
-
-    return res.json({
-      transcript,
-      triggered,
-      imageUrl: null,
-      location: location
-        ? { lat: location.latitude, lng: location.longitude }
-        : null,
-      alertId: alertDoc.id,
-    });
-  } catch (err) {
-    console.error('processAudio error:', err);
-    return res.status(500).json({
-      error: err.message || 'Unknown error',
-      details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
-    });
   }
-});
+);
 
 // ─────────────────────────────────────────────
 //  3. UPLOAD PHOTO  (called after voice trigger)
 // ─────────────────────────────────────────────
 
-exports.uploadPhoto = onRequest(async function (req, res) {
-  try {
-    const alertId = req.query.alertId;
-
-    if (!alertId) {
-      return res.status(400).json({ error: 'Missing alertId query param' });
-    }
-
-    if (!req.rawBody || req.rawBody.length === 0) {
-      return res.status(400).json({ error: 'No image data received in request body' });
-    }
-
-    const alertRef = db.collection('alerts').doc(alertId);
-    const alertSnap = await alertRef.get();
-
-    if (!alertSnap.exists) {
-      return res.status(404).json({ error: 'No alert found with id ' + alertId });
-    }
-
-    const imageUrl = await uploadImageBuffer(req.rawBody, alertId);
-    console.log('Image uploaded to Firebase Storage:', imageUrl);
-
-    await alertRef.update({
-      imageUrl,
-      status: 'complete',
-    });
-
+exports.uploadPhoto = onRequest(
+  { timeoutSeconds: 60, region: 'asia-southeast1' },
+  async function (req, res) {
     try {
-      await sendAlertToAllContacts({
-        imageUrl,
-        location: alertSnap.data().location,
-        timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-        alertType: 'automatic',
-      });
-    } catch (alertErr) {
-      console.error('Failed to send some WhatsApp alerts:', alertErr.message);
-    }
+      const alertId = req.query.alertId;
 
-    return res.json({ alertId, imageUrl, status: 'complete' });
-  } catch (err) {
-    console.error('uploadPhoto error:', err);
-    return res.status(500).json({
-      error: err.message || 'Unknown error',
-      details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
-    });
+      if (!alertId) {
+        return res.status(400).json({ error: 'Missing alertId query param' });
+      }
+
+      if (!req.rawBody || req.rawBody.length === 0) {
+        return res.status(400).json({ error: 'No image data received in request body' });
+      }
+
+      const alertRef = db.collection('alerts').doc(alertId);
+      const alertSnap = await alertRef.get();
+
+      if (!alertSnap.exists) {
+        return res.status(404).json({ error: 'No alert found with id ' + alertId });
+      }
+
+      const imageUrl = await uploadImageBuffer(req.rawBody, alertId);
+      console.log('Image uploaded to Firebase Storage:', imageUrl);
+
+      await alertRef.update({
+        imageUrl,
+        status: 'complete',
+      });
+
+      try {
+        await sendAlertToAllContacts({
+          imageUrl,
+          location: alertSnap.data().location,
+          timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+          alertType: 'automatic',
+        });
+      } catch (alertErr) {
+        console.error('Failed to send some WhatsApp alerts:', alertErr.message);
+      }
+
+      return res.json({ alertId, imageUrl, status: 'complete' });
+    } catch (err) {
+      console.error('uploadPhoto error:', err);
+      return res.status(500).json({
+        error: err.message || 'Unknown error',
+        details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
+      });
+    }
   }
-});
+);
