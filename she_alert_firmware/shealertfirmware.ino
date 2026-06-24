@@ -15,10 +15,7 @@
 // ── Backend URLs ──
 const char* PROCESS_AUDIO_URL = "https://asia-southeast1-shealert-222cc.cloudfunctions.net/processAudio";
 const char* UPLOAD_PHOTO_URL  = "https://asia-southeast1-shealert-222cc.cloudfunctions.net/uploadPhoto";
-
-// ── Location from Firestore (already stored) ──
-// Backend will fetch lastKnownLocation from Firestore automatically
-// so we don't need to send lat/lng from ESP32
+const char* HEARTBEAT_URL     = "https://asia-southeast1-shealert-222cc.cloudfunctions.net/heartbeat";
 
 // ─────────────────────────────────────────────
 //  MIC PINS & CONFIG
@@ -68,14 +65,14 @@ void writeWavHeader(uint8_t* header, int dataSize) {
 
   header[12]='f'; header[13]='m'; header[14]='t'; header[15]=' ';
   header[16]=16; header[17]=0; header[18]=0; header[19]=0;
-  header[20]=1;  header[21]=0;   // PCM
-  header[22]=1;  header[23]=0;   // mono
+  header[20]=1;  header[21]=0;
+  header[22]=1;  header[23]=0;
   header[24]=(SAMPLE_RATE)&0xff;     header[25]=(SAMPLE_RATE>>8)&0xff;
   header[26]=(SAMPLE_RATE>>16)&0xff; header[27]=(SAMPLE_RATE>>24)&0xff;
   header[28]=(byteRate)&0xff;        header[29]=(byteRate>>8)&0xff;
   header[30]=(byteRate>>16)&0xff;    header[31]=(byteRate>>24)&0xff;
-  header[32]=2; header[33]=0;   // block align
-  header[34]=16; header[35]=0;  // bits per sample
+  header[32]=2; header[33]=0;
+  header[34]=16; header[35]=0;
 
   header[36]='d'; header[37]='a'; header[38]='t'; header[39]='a';
   header[40]=(dataSize)&0xff;        header[41]=(dataSize>>8)&0xff;
@@ -122,6 +119,24 @@ bool initCamera() {
 }
 
 // ─────────────────────────────────────────────
+//  HEARTBEAT
+// ─────────────────────────────────────────────
+
+void sendHeartbeat() {
+  HTTPClient hb;
+  String url = String(HEARTBEAT_URL) + "?userId=" + USER_ID;
+  hb.begin(url);
+  hb.setTimeout(5000);
+  int code = hb.GET();
+  hb.end();
+  if (code == 200) {
+    Serial.println("💓 Heartbeat sent — device online");
+  } else {
+    Serial.println("⚠️ Heartbeat failed: " + String(code));
+  }
+}
+
+// ─────────────────────────────────────────────
 //  CAPTURE & UPLOAD PHOTO
 // ─────────────────────────────────────────────
 
@@ -135,7 +150,6 @@ void captureAndUploadPhoto(const char* alertId) {
   }
   Serial.println("✅ Photo captured! Size: " + String(fb->len) + " bytes");
 
-  // Build upload URL with alertId
   String uploadUrl = String(UPLOAD_PHOTO_URL) + "?alertId=" + String(alertId);
 
   Serial.println("📤 Uploading photo to backend...");
@@ -146,7 +160,7 @@ void captureAndUploadPhoto(const char* alertId) {
   http.setTimeout(30000);
 
   int responseCode = http.POST(fb->buf, fb->len);
-  esp_camera_fb_return(fb); // free camera buffer immediately
+  esp_camera_fb_return(fb);
 
   Serial.println("Upload response code: " + String(responseCode));
 
@@ -158,12 +172,14 @@ void captureAndUploadPhoto(const char* alertId) {
     deserializeJson(doc, responseBody);
 
     const char* imageUrl = doc["imageUrl"];
+    const char* audioUrl = doc["audioUrl"];
     const char* status   = doc["status"];
 
     Serial.println("✅ Photo uploaded!");
     Serial.println("🖼  Image URL: " + String(imageUrl));
+    Serial.println("🎤 Audio URL: " + String(audioUrl ? audioUrl : "none"));
     Serial.println("📋 Status: " + String(status));
-    Serial.println("📱 WhatsApp alert should be sent to all contacts now!");
+    Serial.println("📱 WhatsApp alert sent to all contacts with photo + audio!");
   } else {
     Serial.println("❌ Photo upload failed: " + http.getString());
   }
@@ -179,7 +195,6 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  // ── Connect WiFi ──
   Serial.println("Connecting to WiFi...");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
@@ -188,7 +203,6 @@ void setup() {
   }
   Serial.println("\n✅ WiFi connected! IP: " + WiFi.localIP().toString());
 
-  // ── Init mic ──
   I2S.setPinsPdmRx(I2S_CLK, I2S_DIN);
   if (!I2S.begin(I2S_MODE_PDM_RX, SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
     Serial.println("❌ Microphone not found!");
@@ -196,11 +210,13 @@ void setup() {
   }
   Serial.println("✅ Microphone ready!");
 
-  // ── Init camera ──
   if (!initCamera()) {
     Serial.println("❌ Camera failed — halting.");
     while (1);
   }
+
+  // Send first heartbeat immediately on startup
+  sendHeartbeat();
 
   Serial.println("\n🟢 SheAlert hardware ready! Listening...\n");
 }
@@ -210,6 +226,13 @@ void setup() {
 // ─────────────────────────────────────────────
 
 void loop() {
+  // ── Heartbeat every 30 seconds ──
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat > 30000) {
+    sendHeartbeat();
+    lastHeartbeat = millis();
+  }
+
   // ── Step 1: Record audio ──
   int dataSize = TOTAL_SAMPLES * 2;
   int wavSize  = dataSize + 44;
@@ -234,18 +257,17 @@ void loop() {
   Serial.println("🎤 Recording complete!");
 
   // ── Step 2: Send audio to backend ──
-  // userId is passed as query param — backend fetches location from Firestore
-  String audioUrl = String(PROCESS_AUDIO_URL) + "?userId=" + USER_ID;
+  String processUrl = String(PROCESS_AUDIO_URL) + "?userId=" + USER_ID;
 
   Serial.println("📤 Sending audio to backend...");
 
   HTTPClient http;
-  http.begin(audioUrl);
+  http.begin(processUrl);
   http.addHeader("Content-Type", "audio/wav");
   http.setTimeout(30000);
 
   int responseCode = http.POST(wavBuffer, wavSize);
-  free(wavBuffer); // free immediately after sending
+  free(wavBuffer);
 
   Serial.println("Audio response code: " + String(responseCode));
 
@@ -253,7 +275,6 @@ void loop() {
     String responseBody = http.getString();
     Serial.println("Audio response: " + responseBody);
 
-    // ── Step 3: Parse response ──
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, responseBody);
 
@@ -265,9 +286,8 @@ void loop() {
       Serial.println("📝 Transcript: \"" + String(transcript) + "\"");
 
       if (triggered && strlen(alertId) > 0) {
-        // ── Step 4: Trigger detected — capture and upload photo ──
         Serial.println("🚨 TRIGGER DETECTED! AlertId: " + String(alertId));
-        http.end(); // close audio connection before opening photo connection
+        http.end();
         captureAndUploadPhoto(alertId);
         Serial.println("\n✅ Full SOS flow complete! Resuming listening...\n");
       } else {
@@ -282,7 +302,6 @@ void loop() {
 
   http.end();
 
-  // ── Wait before next recording ──
   Serial.println("⏸  Waiting 3s before next recording...\n");
   delay(3000);
 }
