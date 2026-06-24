@@ -40,12 +40,10 @@ async function transcribeAudio(audioBuffer) {
   });
 
   const data = await res.json();
-
   if (!res.ok) {
     console.error('ElevenLabs error:', data);
     throw new Error(data.detail?.message || data.message || 'Transcription failed');
   }
-
   return data.text;
 }
 
@@ -62,8 +60,24 @@ async function uploadImageBuffer(buffer, alertId) {
   });
 
   await file.makePublic();
-  const publicUrl =
-    'https://storage.googleapis.com/' + bucket.name + '/' + fileName;
+  return 'https://storage.googleapis.com/' + bucket.name + '/' + fileName;
+}
+
+async function uploadAudioBuffer(buffer, alertId) {
+  const bucket = storage.bucket();
+  const fileName = 'alerts/' + alertId + '/audio.wav';
+  const file = bucket.file(fileName);
+
+  await file.save(buffer, {
+    metadata: {
+      contentType: 'audio/wav',
+      customTime: new Date().toISOString(),
+    },
+  });
+
+  await file.makePublic();
+  const publicUrl = 'https://storage.googleapis.com/' + bucket.name + '/' + fileName;
+  console.log('Audio uploaded to Firebase Storage:', publicUrl);
   return publicUrl;
 }
 
@@ -93,18 +107,21 @@ async function getContactPhones(userId) {
   return phones;
 }
 
-async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, alertType }) {
+async function sendWhatsAppAlert({ imageUrl, audioUrl, location, timestamp, phoneNumber, alertType }) {
   const mapsLink =
     location
       ? 'https://maps.google.com/?q=' + location.latitude + ',' + location.longitude
       : 'Location unavailable';
 
-  const eventType =
-    alertType === 'manual'
-      ? 'SOS Triggered Manually'
-      : imageUrl
-      ? 'SOS Triggered - Photo: ' + imageUrl
-      : 'SOS Triggered - No photo';
+  let eventType = '';
+  if (alertType === 'manual') {
+    eventType = 'SOS Triggered Manually';
+  } else {
+    const parts = ['SOS Triggered'];
+    if (imageUrl) parts.push('Photo: ' + imageUrl);
+    if (audioUrl) parts.push('Audio: ' + audioUrl);
+    eventType = parts.join(' | ');
+  }
 
   const payload = {
     phone_number: phoneNumber,
@@ -135,7 +152,7 @@ async function sendWhatsAppAlert({ imageUrl, location, timestamp, phoneNumber, a
   return data;
 }
 
-async function sendAlertToAllContacts({ userId, imageUrl, location, timestamp, alertType }) {
+async function sendAlertToAllContacts({ userId, imageUrl, audioUrl, location, timestamp, alertType }) {
   const contacts = await getContactPhones(userId);
   let successCount = 0;
 
@@ -148,6 +165,7 @@ async function sendAlertToAllContacts({ userId, imageUrl, location, timestamp, a
     try {
       await sendWhatsAppAlert({
         imageUrl,
+        audioUrl,
         location,
         timestamp,
         alertType,
@@ -170,6 +188,31 @@ async function sendAlertToAllContacts({ userId, imageUrl, location, timestamp, a
 }
 
 // ─────────────────────────────────────────────
+//  0. HEARTBEAT  (ESP32 device status ping)
+// ─────────────────────────────────────────────
+
+exports.heartbeat = onRequest(
+  { timeoutSeconds: 10 },
+  async function (req, res) {
+    try {
+      const userId = req.query.userId;
+      if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+      await db.collection('users').doc(userId).set({
+        deviceLastSeen: FieldValue.serverTimestamp(),
+        deviceOnline: true,
+      }, { merge: true });
+
+      console.log('Heartbeat received from device for userId:', userId);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('Heartbeat error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────
 //  1. MANUAL ALERT  (SOS hold button in app)
 // ─────────────────────────────────────────────
 
@@ -182,13 +225,9 @@ exports.manualAlert = onRequest(
       }
 
       const { userId, location } = req.body;
-
-      if (!userId) {
-        return res.status(400).json({ error: 'Missing userId in request body' });
-      }
+      if (!userId) return res.status(400).json({ error: 'Missing userId in request body' });
 
       console.log('Manual SOS triggered by userId:', userId);
-      console.log('Location:', location || 'not provided — will fetch from Firestore');
 
       let resolvedLocation = location || null;
       if (!resolvedLocation) {
@@ -203,6 +242,7 @@ exports.manualAlert = onRequest(
         type: 'manual',
         triggered: true,
         imageUrl: null,
+        audioUrl: null,
         location: resolvedLocation,
         status: 'sent',
         timestamp: FieldValue.serverTimestamp(),
@@ -213,6 +253,7 @@ exports.manualAlert = onRequest(
       const sent = await sendAlertToAllContacts({
         userId,
         imageUrl: null,
+        audioUrl: null,
         location: resolvedLocation,
         timestamp,
         alertType: 'manual',
@@ -254,9 +295,7 @@ exports.processAudio = onRequest(
       const lat = req.query.lat ? parseFloat(req.query.lat) : null;
       const lng = req.query.lng ? parseFloat(req.query.lng) : null;
 
-      if (!userId) {
-        return res.status(400).json({ error: 'Missing userId query param' });
-      }
+      if (!userId) return res.status(400).json({ error: 'Missing userId query param' });
 
       const transcript = await transcribeAudio(req.rawBody);
       console.log('Transcript:', transcript);
@@ -272,10 +311,7 @@ exports.processAudio = onRequest(
         location = await getLastKnownLocation(userId);
       }
 
-      console.log(
-        'Location:',
-        location ? location.latitude + ', ' + location.longitude : 'unavailable'
-      );
+      console.log('Location:', location ? location.latitude + ', ' + location.longitude : 'unavailable');
 
       const alertDoc = await db.collection('alerts').add({
         userId,
@@ -283,6 +319,7 @@ exports.processAudio = onRequest(
         transcript,
         triggered,
         imageUrl: null,
+        audioUrl: null,
         location,
         status: 'pending_photo',
         timestamp: FieldValue.serverTimestamp(),
@@ -290,13 +327,22 @@ exports.processAudio = onRequest(
 
       console.log('Automatic alert written with ID:', alertDoc.id);
 
+      // Save audio to Firebase Storage
+      let audioUrl = null;
+      try {
+        audioUrl = await uploadAudioBuffer(req.rawBody, alertDoc.id);
+        await alertDoc.update({ audioUrl });
+        console.log('Audio URL saved to alert:', audioUrl);
+      } catch (audioErr) {
+        console.error('Failed to upload audio:', audioErr.message);
+      }
+
       return res.json({
         transcript,
         triggered,
         imageUrl: null,
-        location: location
-          ? { lat: location.latitude, lng: location.longitude }
-          : null,
+        audioUrl,
+        location: location ? { lat: location.latitude, lng: location.longitude } : null,
         alertId: alertDoc.id,
       });
     } catch (err) {
@@ -318,10 +364,7 @@ exports.uploadPhoto = onRequest(
   async function (req, res) {
     try {
       const alertId = req.query.alertId;
-
-      if (!alertId) {
-        return res.status(400).json({ error: 'Missing alertId query param' });
-      }
+      if (!alertId) return res.status(400).json({ error: 'Missing alertId query param' });
 
       if (!req.rawBody || req.rawBody.length === 0) {
         return res.status(400).json({ error: 'No image data received in request body' });
@@ -337,16 +380,16 @@ exports.uploadPhoto = onRequest(
       const imageUrl = await uploadImageBuffer(req.rawBody, alertId);
       console.log('Image uploaded to Firebase Storage:', imageUrl);
 
-      await alertRef.update({
-        imageUrl,
-        status: 'complete',
-      });
+      await alertRef.update({ imageUrl, status: 'complete' });
+
+      const audioUrl = alertSnap.data().audioUrl || null;
 
       try {
         const alertData = alertSnap.data();
         await sendAlertToAllContacts({
           userId: alertData.userId,
           imageUrl,
+          audioUrl,
           location: alertData.location,
           timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
           alertType: 'automatic',
@@ -355,7 +398,7 @@ exports.uploadPhoto = onRequest(
         console.error('Failed to send some WhatsApp alerts:', alertErr.message);
       }
 
-      return res.json({ alertId, imageUrl, status: 'complete' });
+      return res.json({ alertId, imageUrl, audioUrl, status: 'complete' });
     } catch (err) {
       console.error('uploadPhoto error:', err);
       return res.status(500).json({
