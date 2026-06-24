@@ -10,10 +10,8 @@ import '../widgets/status_card.dart';
 import '../widgets/location_card.dart';
 import '../widgets/info_tile.dart';
 
-// TODO: replace with real auth uid once login is built
 const String currentUserId = 'testuser1';
 
-// Your Cloud Function URL — must match exactly (case-sensitive)
 const String _manualAlertUrl =
     'https://asia-southeast1-shealert-222cc.cloudfunctions.net/manualAlert';
 
@@ -24,12 +22,15 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool connected = true;
+  // FIX: starts as false — only true when ESP32 heartbeat confirmed
+  bool deviceConnected = false;
+  bool locationReady = false;
   String place = "Locating...";
   double? _currentLat;
   double? _currentLng;
   DateTime lastUpdate = DateTime.now();
   StreamSubscription<Position>? _posSub;
+  StreamSubscription<DocumentSnapshot>? _deviceSub;
   Timer? _ageTimer;
   Timer? _holdTimer;
   bool _isHolding = false;
@@ -49,23 +50,47 @@ class _HomeScreenState extends State<HomeScreen> {
         .map((snap) => snap.docs.length);
 
     _startTracking();
+    _listenToDeviceHeartbeat();
     _ageTimer = Timer.periodic(
       const Duration(seconds: 1),
       (_) => setState(() {}),
     );
   }
 
+  // FIX: Listen to deviceLastSeen from Firestore
+  // Device is considered connected if heartbeat received within 60 seconds
+  void _listenToDeviceHeartbeat() {
+    _deviceSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUserId)
+        .snapshots()
+        .listen((snap) {
+      if (!snap.exists) {
+        setState(() => deviceConnected = false);
+        return;
+      }
+      final data = snap.data()!;
+      final Timestamp? lastSeen = data['deviceLastSeen'] as Timestamp?;
+      if (lastSeen == null) {
+        setState(() => deviceConnected = false);
+        return;
+      }
+      final diff = DateTime.now().difference(lastSeen.toDate());
+      setState(() => deviceConnected = diff.inSeconds < 60);
+    });
+  }
+
   Future<void> _startTracking() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      setState(() => connected = false);
+      setState(() => locationReady = false);
       return;
     }
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        setState(() => connected = false);
+        setState(() => locationReady = false);
         return;
       }
     }
@@ -100,15 +125,15 @@ class _HomeScreenState extends State<HomeScreen> {
               "${p.subLocality ?? p.locality ?? ''}, ${p.locality ?? ''}"
                   .trim();
           lastUpdate = DateTime.now();
-          connected = true;
+          locationReady = true;
         });
       } catch (_) {
         setState(() {
           lastUpdate = DateTime.now();
-          connected = true;
+          locationReady = true;
         });
       }
-    }, onError: (_) => setState(() => connected = false));
+    }, onError: (_) => setState(() => locationReady = false));
   }
 
   String get _updatedLabel {
@@ -157,7 +182,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _isSendingAlert = true;
     });
 
-    // Check contacts first — abort early if none
     final contactSnap = await FirebaseFirestore.instance
         .collection('users')
         .doc(currentUserId)
@@ -173,7 +197,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Show optimistic dialog immediately
     if (mounted) _showSendingDialog();
 
     try {
@@ -200,8 +223,6 @@ class _HomeScreenState extends State<HomeScreen> {
       debugPrint('Response body: ${response.body}');
 
       if (!mounted) return;
-
-      // Close the sending dialog
       Navigator.of(context, rootNavigator: true).pop();
 
       if (response.statusCode == 200) {
@@ -244,18 +265,12 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Icon(Icons.warning_amber_rounded, color: Colors.red),
             SizedBox(width: 8),
-            Text(
-              '🚨 Sending Alert...',
-              style: TextStyle(color: Colors.white),
-            ),
+            Text('🚨 Sending Alert...', style: TextStyle(color: Colors.white)),
           ],
         ),
         content: const Row(
           children: [
-            CircularProgressIndicator(
-              color: AppColors.teal,
-              strokeWidth: 2.5,
-            ),
+            CircularProgressIndicator(color: AppColors.teal, strokeWidth: 2.5),
             SizedBox(width: 16),
             Expanded(
               child: Text(
@@ -278,10 +293,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Icon(Icons.warning_amber_rounded, color: Colors.red),
             SizedBox(width: 8),
-            Text(
-              '🚨 Alert Sent!',
-              style: TextStyle(color: Colors.white),
-            ),
+            Text('🚨 Alert Sent!', style: TextStyle(color: Colors.white)),
           ],
         ),
         content: Text(
@@ -316,6 +328,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _posSub?.cancel();
+    _deviceSub?.cancel();
     _ageTimer?.cancel();
     _holdTimer?.cancel();
     super.dispose();
@@ -330,12 +343,12 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             StatusCard(
-              status: connected
+              status: locationReady
                   ? SafetyStatus.safe
                   : SafetyStatus.disconnected,
             ),
             const SizedBox(height: 16),
-            connected
+            locationReady
                 ? LocationCard(
                     place: place,
                     updatedLabel: "updated $_updatedLabel",
@@ -355,10 +368,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     stream: _contactCountStream,
                     builder: (context, snapshot) {
                       final count = snapshot.data ?? 0;
-                      return InfoTile(
-                        label: 'Contacts',
-                        value: '$count',
-                      );
+                      return InfoTile(label: 'Contacts', value: '$count');
                     },
                   ),
                 ),
@@ -366,123 +376,108 @@ class _HomeScreenState extends State<HomeScreen> {
                 Expanded(
                   child: InfoTile(
                     label: 'Device',
-                    value: connected ? 'Connected' : 'Disconnected',
-                    valueColor:
-                        connected ? AppColors.teal : AppColors.red,
+                    // FIX: now shows real ESP32 connection status
+                    value: deviceConnected ? 'Connected' : 'Disconnected',
+                    valueColor: deviceConnected ? AppColors.teal : AppColors.red,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 20),
 
-            connected
-                ? GestureDetector(
-                    onLongPressStart: (_) => _onHoldStart(),
-                    onLongPressEnd: (_) => _onHoldEnd(),
-                    child: Stack(
-                      children: [
-                        Container(
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 18),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [AppColors.red, AppColors.redDark],
-                            ),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.red.withOpacity(0.4),
-                                blurRadius: 16,
-                              ),
-                            ],
-                          ),
-                          child: Center(
-                            child: _isSendingAlert
-                                ? const SizedBox(
-                                    height: 22,
-                                    width: 22,
-                                    child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 2.5,
-                                    ),
-                                  )
-                                : const Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.warning_amber_rounded,
-                                        color: Colors.white,
-                                        size: 22,
-                                      ),
-                                      SizedBox(width: 8),
-                                      Text(
-                                        'Trigger emergency alert',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                          ),
-                        ),
-
-                        if (_isHolding)
-                          Positioned.fill(
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(16),
-                              child: LinearProgressIndicator(
-                                value: _holdProgress,
-                                backgroundColor:
-                                    Colors.white.withOpacity(0.2),
-                                valueColor:
-                                    const AlwaysStoppedAnimation<Color>(
-                                        Colors.white),
-                                minHeight: double.infinity,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  )
-
-                : Container(
+            // FIX: Manual trigger always visible regardless of device status
+            GestureDetector(
+              onLongPressStart: (_) => _onHoldStart(),
+              onLongPressEnd: (_) => _onHoldEnd(),
+              child: Stack(
+                children: [
+                  Container(
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     decoration: BoxDecoration(
-                      color: AppColors.cardBg,
+                      gradient: const LinearGradient(
+                        colors: [AppColors.red, AppColors.redDark],
+                      ),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppColors.cardBorder),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.red.withOpacity(0.4),
+                          blurRadius: 16,
+                        ),
+                      ],
                     ),
                     child: Center(
-                      child: TextButton(
-                        onPressed: _startTracking,
-                        child: const Text(
-                          'Reconnect device',
-                          style: TextStyle(
-                            color: AppColors.textSecondary,
-                            fontWeight: FontWeight.bold,
-                          ),
+                      child: _isSendingAlert
+                          ? const SizedBox(
+                              height: 22,
+                              width: 22,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2.5,
+                              ),
+                            )
+                          : const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.warning_amber_rounded,
+                                    color: Colors.white, size: 22),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Trigger emergency alert',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+
+                  if (_isHolding)
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: LinearProgressIndicator(
+                          value: _holdProgress,
+                          backgroundColor: Colors.white.withOpacity(0.2),
+                          valueColor:
+                              const AlwaysStoppedAnimation<Color>(Colors.white),
+                          minHeight: double.infinity,
                         ),
                       ),
                     ),
-                  ),
+                ],
+              ),
+            ),
 
             const SizedBox(height: 6),
             Center(
               child: Text(
                 _isSendingAlert
                     ? 'Sending alert...'
-                    : connected
-                        ? 'Press and hold for 2 seconds to send'
-                        : 'Emergency alert needs device connection',
+                    : 'Press and hold for 2 seconds to send',
                 style: const TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 12,
                 ),
               ),
             ),
+
+            // Device status hint
+            if (!deviceConnected) ...[
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  '⚠️ Hardware device offline — auto trigger unavailable',
+                  style: TextStyle(
+                    color: AppColors.red.withOpacity(0.8),
+                    fontSize: 11,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
           ],
         ),
       ),
