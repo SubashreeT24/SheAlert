@@ -52,7 +52,7 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 | **Speech-to-Text** | ElevenLabs STT API | Converts recorded audio to text for trigger detection |
 | **Database** | Firebase Firestore | Stores alerts (automatic/manual) & contacts |
 | **File Storage** | Firebase Storage | Stores captured images & `.wav` audio files |
-| **Notifications** | CircuitDigest WhatsApp API | Sends WhatsApp alerts to emergency contacts |
+| **Notifications** | CircuitDigest Cloud API | Sends WhatsApp alerts to emergency contacts |
 | **Mobile App** | Flutter (Dart) | Home, History, and Contacts management UI |
 | **Realtime Sync** | Firebase Firestore listeners | Live device status & alert history updates |
 
@@ -63,22 +63,25 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 ```mermaid
 flowchart TD
     subgraph AUTO["🟢 Automatic Alert — trigger word 'blueberry'"]
-        A1["ESP32-S3\nRecords audio + photo"]
-        A2["processAudio()\nTranscribe & check trigger word"]
-        A3["uploadPhoto()\nStore evidence & notify"]
+        direction TB
+        A1["ESP32-S3<br/>Records audio + photo"]
+        A2["processAudio()<br/>Transcribe & check trigger"]
+        A3["uploadPhoto()<br/>Store evidence & notify"]
         A1 --> A2 --> A3
     end
 
     subgraph MANUAL["🔴 Manual Alert — SOS held 2s"]
-        M1["Flutter App\nHold SOS button"]
-        M2["Get GPS location\nLive location fix"]
+        direction TB
+        M1["Flutter App<br/>Hold SOS button"]
+        M2["Get GPS Location<br/>Live location fix"]
         M1 --> M2
     end
 
-    subgraph SHARED["☁️ Shared Backend — Firebase + WhatsApp API"]
-        F[("Firestore\nAlerts + contacts")]
-        S[("Storage\nImages + audio")]
-        C["CircuitDigest\nWhatsApp send"]
+    subgraph SHARED["☁️ Shared Backend — Firebase + CircuitDigest Cloud API"]
+        direction LR
+        F[("Firestore<br/>Alerts + Contacts")]
+        S[("Storage<br/>Images + Audio")]
+        C["CircuitDigest Cloud<br/>WhatsApp Notification"]
     end
 
     A3 -->|"alert + evidence"| SHARED
@@ -93,7 +96,7 @@ flowchart TD
 | **2. STT + Trigger Check** | ElevenLabs converts speech to text; backend checks for "blueberry" |
 | **3. Photo Capture** *(automatic only)* | On trigger, the onboard camera captures a photo |
 | **4. Firebase Store** | Image, audio, alert type, location & timestamp are saved to Firestore/Storage |
-| **5. WhatsApp Alert** | CircuitDigest sends the alert (with evidence, for automatic mode) to all emergency contacts |
+| **5. WhatsApp Alert** | CircuitDigest Cloud sends the alert (with evidence, for automatic mode) to all emergency contacts |
 
 If no trigger word is found in a 5s clip, the device waits 3s before starting the next listening cycle. Manual mode skips straight from SOS press → GPS fix → alert, so it doesn't wait on recording, transcription, or photo upload — trading evidence for speed.
 
@@ -164,8 +167,6 @@ SheAlert/
 └── README.md
 ```
 
-> ⚠️ I can't verify this against your actual repo since I don't have access to it — double-check the folder/file names above and let me know if anything's off.
-
 ---
 
 ## 📸 7. Screenshots / Demo
@@ -190,12 +191,12 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ## 🎯 8. Key Learnings
 
-- **Real-time audio streaming on ESP32-S3** — capturing continuous PDM mic audio in fixed windows without blocking the camera/Wi-Fi tasks running on the same chip
-- **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about when evidence-richness matters more than raw speed in an emergency UX
-- **Wiring together third-party APIs into one pipeline** — chaining ElevenLabs STT → Firestore → Firebase Storage → CircuitDigest WhatsApp into a single reliable alert flow
-- **Firebase Cloud Functions region/config quirks** — structuring functions so hardware, backend, and app all agree on the same project config and region
-- **Realtime state across three layers** — keeping hardware heartbeat, backend alert creation, and Flutter's Firestore listeners in sync so the app always reflects live device/alert status
-- **Handling failure gracefully** — deciding what happens when no trigger word is detected, when uploads fail, or when the device goes offline, without silently dropping an alert
+- 🎙️ **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio in fixed windows without blocking the camera/Wi-Fi tasks running on the same chip
+- ⚖️ **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about when evidence-richness matters more than raw speed in an emergency UX
+- 🔗 **Wiring third-party APIs into one pipeline** — chaining ElevenLabs STT → Firestore → Firebase Storage → CircuitDigest Cloud into a single reliable alert flow
+- ☁️ **Firebase Cloud Functions config quirks** — structuring functions so hardware, backend, and app all agree on the same project config and region
+- 🔄 **Realtime state across three layers** — keeping hardware heartbeat, backend alert creation, and Flutter's Firestore listeners in sync so the app always reflects live device/alert status
+- 🛡️ **Handling failure gracefully** — deciding what happens when no trigger word is detected, when uploads fail, or when the device goes offline, without silently dropping an alert
 
 ---
 
