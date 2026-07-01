@@ -62,17 +62,49 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 
 ### 4.1 Component Architecture
 
-<div align="center">
+mermaid
+graph LR
+    subgraph Hardware["🔌 Hardware"]
+        ESP["XIAO ESP32-S3 Sense<br/>Mic + Camera"]
+    end
 
-![SheAlert Architecture](docs/screenshots/architecture.png)
+    subgraph Backend["☁️ Backend — index.js"]
+        PA["processAudio()"]
+        UP["uploadPhoto()"]
+        HB["heartbeat()"]
+    end
 
-</div>
+    subgraph FB["🔥 Firebase"]
+        FS[("Firestore<br/>Alerts (auto/manual) + Contacts")]
+        ST[("Storage<br/>Images + Audio")]
+    end
 
-Both alert paths run independently and converge on the same Firebase + WhatsApp backend:
+    subgraph External["🌐 External APIs"]
+        EL["ElevenLabs<br/>Speech-to-Text"]
+        CD["CircuitDigest<br/>WhatsApp API"]
+    end
 
-- **Automatic path** (teal): the ESP32-S3 records audio and photo → `processAudio()` transcribes and checks for the trigger word → `uploadPhoto()` stores the evidence and notifies contacts.
-- **Manual path** (orange): the Flutter app captures a 2-second SOS hold → fetches a live GPS fix → sends the alert straight to the backend, skipping evidence capture for speed.
-- **Shared backend** (gray): Firestore holds alerts and contacts, Storage holds images/audio, and CircuitDigest delivers everything over WhatsApp.
+    subgraph Mobile["📱 Flutter App"]
+        FL["Home / History / Contacts"]
+    end
+
+    ESP -->|"audio .wav<br/>every 5s"| PA
+    PA -->|"transcribe"| EL
+    EL -->|"transcript"| PA
+    PA -->|"trigger found →<br/>create alert (auto)"| FS
+    PA -->|"store .wav"| ST
+    PA -->|"send .wav"| CD
+    PA -->|"alertId"| ESP
+    ESP -->|"photo"| UP
+    UP -->|"store image"| ST
+    UP -->|"link image to alert"| FS
+    UP -->|"send image"| CD
+    ESP -->|"heartbeat<br/>every 30s"| HB
+    HB -->|"update device status"| FS
+    FL -->|"create alert (manual)"| FS
+    FL -->|"send location"| CD
+    FS <-->|"realtime listeners"| FL
+
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
