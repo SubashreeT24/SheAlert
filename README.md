@@ -63,74 +63,77 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 ### 4.1 Component Architecture
 
 ```mermaid
-graph LR
-    subgraph Hardware["🔌 Hardware"]
-        ESP["XIAO ESP32-S3 Sense<br/>Mic + Camera"]
-    end
+flowchart TD
+    ESP["🔌 XIAO ESP32-S3<br/>Mic + Camera"]
+    BE["☁️ Backend<br/>Cloud Functions"]
+    STT["ElevenLabs<br/>Speech-to-Text"]
+    WA["CircuitDigest<br/>WhatsApp API"]
+    Contact["📞 Emergency<br/>Contact"]
+    FS[("Firestore<br/>Alerts + Contacts")]
+    ST[("Storage<br/>Images + Audio")]
+    APP["📱 Flutter App"]
 
-    subgraph Backend["☁️ Backend — index.js<br/>Firebase Cloud Functions"]
-        PA["processAudio()"]
-        UP["uploadPhoto()"]
-        HB["heartbeat()"]
-    end
+    ESP -->|"audio / photo / heartbeat"| BE
+    BE <-->|"transcribe"| STT
+    BE --> FS
+    BE --> ST
+    BE --> WA
+    WA --> Contact
 
-    subgraph FB["🔥 Firebase"]
-        FS[("Firestore<br/>Alerts + Contacts")]
-        ST[("Storage<br/>Images + Audio")]
-    end
-
-    subgraph External["🌐 External APIs"]
-        EL["ElevenLabs<br/>Speech-to-Text"]
-        CD["CircuitDigest<br/>WhatsApp API"]
-    end
-
-    subgraph Mobile["📱 Flutter App"]
-        FL["Home / History<br/>/ Contacts"]
-    end
-
-    ESP -->|"Audio .wav<br/>every 5s"| PA
-    PA -->|"transcribe"| EL
-    EL -->|"transcript"| PA
-    PA -->|"trigger word found<br/>create alert: automatic"| FS
-    PA -->|"store audio .wav"| ST
-    PA -->|"send WhatsApp alert<br/>with audio"| CD
-    PA -->|"alertId"| ESP
-    ESP -->|"Captured Photo"| UP
-    UP -->|"store photo"| ST
-    UP -->|"update alert"| FS
-    UP -->|"send WhatsApp alert<br/>with photo"| CD
-    ESP -->|"Heartbeat<br/>every 30s"| HB
-    HB -->|"update status"| FS
-    FL -->|"Manual Trigger<br/>create alert: manual"| FS
-    FL -->|"Manual Trigger"| CD
-    FS <-->|"Realtime Listeners"| FL
+    FS <-->|"realtime sync"| APP
+    APP -->|"manual SOS"| FS
+    APP -->|"manual SOS"| WA
 ```
 
-> **Note:** `processAudio()` is not just a trigger check — since the `.wav` file is itself sent as part of the automatic WhatsApp alert, it also writes to **Storage** and calls the **CircuitDigest** API directly, in addition to creating the alert record in **Firestore**. Firestore's role is mainly to hold the dynamic, frequently-changing data: the alert log (tagged `automatic` / `manual`) and the emergency contacts list — the actual media (photos, audio) lives in Storage.
+> The backend is the hub: it takes input from the device (audio, photo, heartbeat), checks it, saves it (Firestore for alert/contact records, Storage for media), and pushes the WhatsApp notification out. The Flutter app rides on the same Firestore data for its own manual SOS button and for showing live alert history.
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
-```mermaid
-flowchart TD
-    A["🎙️ ESP32-S3 records<br/>5s audio clip"] --> B["Send audio to<br/>processAudio()"]
-    B --> C["ElevenLabs Speech-to-Text<br/>generates transcript"]
-    C --> D{"Trigger word<br/>'blueberry'<br/>detected?"}
-    D -- No --> W["⏳ Wait 3s"]
-    W --> A
-    D -- Yes --> E["Create Alert in Firestore<br/>type: automatic"]
-    E --> F["📸 ESP32-S3<br/>captures photo"]
-    F --> G["Upload photo →<br/>uploadPhoto()"]
-    G --> H["Store image + audio<br/>in Firebase Storage"]
-    H --> I["Send WhatsApp Alert<br/>via CircuitDigest API"]
-    I --> J["✅ Contacts receive:<br/>Image URL + Audio .wav<br/>+ Location + Timestamp"]
+**Automatic mode** (device-triggered, evidence-rich):
 
-    K["📱 User presses<br/>Manual SOS (hold 2s)"] --> L["Get live<br/>GPS location"]
-    L --> M["Create Alert in Firestore<br/>type: manual"]
-    M --> N["Send WhatsApp Alert<br/>via CircuitDigest API"]
-    N --> O["✅ Contacts receive:<br/>Location + Timestamp<br/>(no media, faster)"]
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3
+    participant BE as processAudio()
+    participant STT as ElevenLabs
+    participant FS as Firestore
+    participant ST as Storage
+    participant WA as CircuitDigest
+
+    loop every 5s
+        ESP->>BE: audio.wav
+        BE->>STT: transcribe
+        STT-->>BE: transcript
+        alt trigger word not found
+            BE-->>ESP: wait 3s, listen again
+        else "blueberry" found
+            BE->>FS: create alert (automatic)
+            BE->>ST: store audio.wav
+            ESP->>BE: captured photo
+            BE->>ST: store photo
+            BE->>WA: send WhatsApp alert
+            WA-->>ESP: ✅ contact notified<br/>(image + audio + location + time)
+        end
+    end
 ```
 
-> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. Each listening cycle records for **5 seconds**, transcribes and checks for the trigger word, and if not found, **waits 3 seconds** before starting the next recording cycle.
+**Manual mode** (app-triggered, speed-first):
+
+```mermaid
+sequenceDiagram
+    participant User as 📱 User
+    participant App as Flutter App
+    participant FS as Firestore
+    participant WA as CircuitDigest
+
+    User->>App: hold SOS (2s)
+    App->>App: get live GPS location
+    App->>FS: create alert (manual)
+    App->>WA: send WhatsApp alert
+    WA-->>User: ✅ contact notified<br/>(location + time, no media)
+```
+
+> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. Each listening cycle records for **5 seconds**, transcribes and checks for the trigger word, and if not found, **waits 3 seconds** before starting the next cycle.
 
 ---
 
