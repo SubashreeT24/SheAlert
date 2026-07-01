@@ -48,12 +48,12 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 |---|---|---|
 | **Hardware** | XIAO ESP32-S3 Sense (Camera + PDM Mic) | Captures audio continuously & photo on trigger |
 | **Firmware** | Arduino (C++), `esp_camera`, `ESP_I2S` | Records audio, controls camera, sends heartbeat |
-| **Backend** | Node.js (Firebase Cloud Functions) — `index.js` | Processes audio, manages alerts, uploads media |
+| **Backend** | Node.js (Firebase Cloud Functions) — `functions/index.js` | Processes audio, manages alerts, uploads media |
 | **Speech-to-Text** | ElevenLabs API | Converts recorded audio to text for trigger detection |
 | **Database** | Firebase Firestore | Stores alerts (classified automatic/manual) & contacts |
 | **File Storage** | Firebase Storage | Stores captured images & `.wav` audio files |
 | **Notifications** | CircuitDigest Cloud API | Sends WhatsApp alerts to emergency contacts |
-| **Mobile App** | Flutter (Dart) | Home, History, and Contacts management UI |
+| **Mobile App** | Flutter (Dart) — `lib/screens/` | Home, History, and Contacts management UI |
 | **Realtime Sync** | Firebase Firestore listeners | Live device status & alert history updates |
 
 ---
@@ -113,7 +113,7 @@ flowchart TD
 | Connectivity | Wi-Fi (HTTPS to Firebase Cloud Functions) |
 | Heartbeat Interval | Every 30 seconds |
 
-### 5.2 Backend — `index.js` (Firebase Cloud Functions, `asia-southeast1`)
+### 5.2 Backend — `functions/index.js` (Firebase Cloud Functions, `asia-southeast1`)
 
 | Endpoint | Responsibility |
 |---|---|
@@ -135,29 +135,42 @@ flowchart TD
 
 ```
 SheAlert/
-├── firmware/
-│   └── shealert_esp32s3/
-│       └── shealert_esp32s3.ino        # Arduino firmware (mic + camera + heartbeat)
-├── backend/
-│   ├── index.js                        # Firebase Cloud Functions (processAudio, uploadPhoto, heartbeat)
-│   ├── package.json
-│   └── .env                            # API keys (ElevenLabs, CircuitDigest) — not committed
-├── mobile_app/
-│   └── shealert_flutter/
-│       ├── lib/
-│       │   ├── pages/
-│       │   │   ├── home_page.dart
-│       │   │   ├── history_page.dart
-│       │   │   └── contacts_page.dart
-│       │   └── main.dart
-│       └── pubspec.yaml
+├── she_alert_app/                      # Flutter mobile app
+│   ├── android/
+│   ├── assets/
+│   ├── lib/
+│   │   ├── models/
+│   │   ├── screens/
+│   │   │   ├── home_screen.dart
+│   │   │   ├── history_screen.dart
+│   │   │   └── contacts_screen.dart
+│   │   ├── services/
+│   │   ├── theme/
+│   │   ├── widgets/
+│   │   ├── firebase_options.dart
+│   │   └── main.dart
+│   ├── test/
+│   ├── web/
+│   ├── .firebaserc
+│   ├── firebase.json
+│   ├── pubspec.yaml
+│   └── pubspec.lock
+├── she_alert_backend/                  # Firebase Cloud Functions
+│   ├── functions/
+│   │   ├── index.js                    # processAudio, uploadPhoto, heartbeat
+│   │   ├── package.json
+│   │   └── .env                        # API keys (ElevenLabs, CircuitDigest) — not committed
+│   ├── .firebaserc
+│   └── firebase.json
+├── she_alert_firmware/                 # Arduino firmware
+│   └── shealertfirmware.ino
 ├── docs/
 │   └── screenshots/
 │       └── architecture.svg
 └── README.md
 ```
 
-> ⚠️ **Heads up on the `backend/` folder:** Firebase Cloud Functions initialized through VSCode's `firebase init functions` normally default to a folder named **`functions/`**, not `backend/`. If your `firebase.json` doesn't explicitly set `"source": "backend"`, `firebase deploy` will look in the wrong place. Double-check your real repo and either rename the folder or confirm the custom source path is set. I can't see your actual VSCode workspace, so please verify this against what you actually have and let me know if it needs adjusting.
+> Verified against the actual VSCode workspace — the three components (`she_alert_app`, `she_alert_backend`, `she_alert_firmware`) sit directly at the project root, and Cloud Functions code correctly lives inside `she_alert_backend/functions/`. Build artifacts, IDE files (`.dart_tool`, `.idea`, `build`, `.metadata`), lockfiles, and local testing/seed scripts (`harness.js`, `seed.js`, `emulator-data/`) are omitted here for clarity since they're either generated or dev-only.
 
 ---
 
