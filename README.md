@@ -64,7 +64,7 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 
 <div align="center">
 
-![SheAlert Architecture](docs/screenshots/architecture.svg)
+![SheAlert Architecture](docs/screenshots/architecture.png)
 
 </div>
 
