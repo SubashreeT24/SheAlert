@@ -89,48 +89,19 @@ flowchart TD
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
-**Automatic mode** (device-triggered, evidence-rich):
-
 ```mermaid
-sequenceDiagram
-    participant ESP as ESP32-S3
-    participant BE as processAudio()
-    participant STT as ElevenLabs
-    participant FS as Firestore
-    participant ST as Storage
-    participant WA as CircuitDigest
+flowchart TD
+    A["🎙️ Record 5s<br/>audio clip"] --> B["Transcribe<br/>(ElevenLabs)"]
+    B --> C{"Trigger word<br/>found?"}
+    C -- No --> W["⏳ Wait 3s"] --> A
+    C -- Yes --> D["Create alert<br/>(automatic) + capture photo"]
+    D --> E["Store audio + photo<br/>in Storage"]
+    E --> F["Send WhatsApp alert<br/>(CircuitDigest)"]
+    F --> G["✅ Contact gets:<br/>image + audio + location + time"]
 
-    loop every 5s
-        ESP->>BE: audio.wav
-        BE->>STT: transcribe
-        STT-->>BE: transcript
-        alt trigger word not found
-            BE-->>ESP: wait 3s, listen again
-        else "blueberry" found
-            BE->>FS: create alert (automatic)
-            BE->>ST: store audio.wav
-            ESP->>BE: captured photo
-            BE->>ST: store photo
-            BE->>WA: send WhatsApp alert
-            WA-->>ESP: ✅ contact notified<br/>(image + audio + location + time)
-        end
-    end
-```
-
-**Manual mode** (app-triggered, speed-first):
-
-```mermaid
-sequenceDiagram
-    participant User as 📱 User
-    participant App as Flutter App
-    participant FS as Firestore
-    participant WA as CircuitDigest
-
-    User->>App: hold SOS (2s)
-    App->>App: get live GPS location
-    App->>FS: create alert (manual)
-    App->>WA: send WhatsApp alert
-    WA-->>User: ✅ contact notified<br/>(location + time, no media)
+    H["📱 Hold SOS<br/>(2s)"] --> I["Create alert<br/>(manual) + get GPS"]
+    I --> J["Send WhatsApp alert<br/>(CircuitDigest)"]
+    J --> K["✅ Contact gets:<br/>location + time"]
 ```
 
 > **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. Each listening cycle records for **5 seconds**, transcribes and checks for the trigger word, and if not found, **waits 3 seconds** before starting the next cycle.
