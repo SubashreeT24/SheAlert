@@ -63,29 +63,19 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 ### 4.1 Component Architecture
 
 ```mermaid
-flowchart TD
-    ESP["🔌 XIAO ESP32-S3<br/>Mic + Camera"]
-    BE["☁️ Backend<br/>Cloud Functions"]
-    STT["ElevenLabs<br/>Speech-to-Text"]
-    WA["CircuitDigest<br/>WhatsApp API"]
-    Contact["📞 Emergency<br/>Contact"]
-    FS[("Firestore<br/>Alerts + Contacts")]
-    ST[("Storage<br/>Images + Audio")]
-    APP["📱 Flutter App"]
-
-    ESP -->|"audio / photo / heartbeat"| BE
-    BE <-->|"transcribe"| STT
-    BE --> FS
-    BE --> ST
-    BE --> WA
-    WA --> Contact
-
-    FS <-->|"realtime sync"| APP
-    APP -->|"manual SOS"| FS
-    APP -->|"manual SOS"| WA
+flowchart LR
+    A["📡 ESP32-S3<br/>Mic + Camera"] --> B["☁️ Cloud Backend<br/>Cloud Functions"]
+    B --> C["Firestore<br/>Database"]
+    B --> D["ElevenLabs<br/>Speech-to-Text"]
+    B --> E["Firebase Storage<br/>Media"]
+    B --> F["CircuitDigest<br/>WhatsApp Alerts"]
+    C --> G["📱 Mobile App +<br/>Emergency Contact"]
+    D --> G
+    E --> G
+    F --> G
 ```
 
-> The backend is the hub: it takes input from the device (audio, photo, heartbeat), checks it, saves it (Firestore for alert/contact records, Storage for media), and pushes the WhatsApp notification out. The Flutter app rides on the same Firestore data for its own manual SOS button and for showing live alert history.
+> The device streams audio/photo to the Cloud Backend, which fans out to four services — Firestore for alert & contact records, ElevenLabs for trigger-word transcription, Storage for media, and CircuitDigest for the WhatsApp send — and everything converges at the mobile app / emergency contact.
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
