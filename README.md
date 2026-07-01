@@ -20,7 +20,7 @@
 
 **SheAlert** is a real-time women's safety monitoring system that combines a wearable/embedded hardware device with a mobile app to send emergency alerts through two modes:
 
-- 🎙️ **Automatic Mode** — Continuously listens for a secret trigger word ("**blueberry**"). Once detected, it captures a photo, records audio evidence, and instantly notifies emergency contacts over WhatsApp with location and timestamp.
+- 🎙️ **Automatic Mode** — Continuously listens for a secret trigger word ("**blueberry**"). Once detected, it captures a photo, records audio evidence, and instantly notifies emergency contacts over WhatsApp with **location, timestamp, and evidence** (image URL and audio `.wav` file).
 - 🆘 **Manual Mode** — A press-and-hold SOS button in the companion Flutter app for situations where speed matters more than evidence, sending just live location and timestamp.
 
 The system is designed around a simple principle: **automatic mode maximizes evidence, manual mode maximizes speed.**
@@ -50,7 +50,7 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 | **Firmware** | Arduino (C++), `esp_camera`, `ESP_I2S` | Records audio, controls camera, sends heartbeat |
 | **Backend** | Node.js (Firebase Cloud Functions) — `index.js` | Processes audio, manages alerts, uploads media |
 | **Speech-to-Text** | ElevenLabs API | Converts recorded audio to text for trigger detection |
-| **Database** | Firebase Firestore | Stores alerts, device status, contacts |
+| **Database** | Firebase Firestore | Stores alerts (classified automatic/manual) & contacts |
 | **File Storage** | Firebase Storage | Stores captured images & `.wav` audio files |
 | **Notifications** | CircuitDigest Cloud API | Sends WhatsApp alerts to emergency contacts |
 | **Mobile App** | Flutter (Dart) | Home, History, and Contacts management UI |
@@ -68,64 +68,68 @@ graph LR
         ESP["XIAO ESP32-S3 Sense<br/>Mic + Camera"]
     end
 
-    subgraph Backend["☁️ Backend — index.js (Firebase Cloud Functions)"]
+    subgraph Backend["☁️ Backend — index.js"]
         PA["processAudio()"]
         UP["uploadPhoto()"]
         HB["heartbeat()"]
     end
 
     subgraph FB["🔥 Firebase"]
-        FS[("Firestore")]
-        ST[("Storage")]
+        FS[("Firestore<br/>Alerts (auto/manual) + Contacts")]
+        ST[("Storage<br/>Images + Audio")]
     end
 
     subgraph External["🌐 External APIs"]
         EL["ElevenLabs<br/>Speech-to-Text"]
-        CD["CircuitDigest Cloud API<br/>WhatsApp Notifications"]
+        CD["CircuitDigest<br/>WhatsApp API"]
     end
 
     subgraph Mobile["📱 Flutter App"]
         FL["Home / History / Contacts"]
     end
 
-    ESP -->|"Audio .wav (every 5s)"| PA
-    PA --> EL
-    EL --> PA
-    PA -->|"trigger word found"| FS
+    ESP -->|"audio .wav<br/>every 5s"| PA
+    PA -->|"transcribe"| EL
+    EL -->|"transcript"| PA
+    PA -->|"trigger found →<br/>create alert (auto)"| FS
+    PA -->|"store .wav"| ST
+    PA -->|"send .wav"| CD
     PA -->|"alertId"| ESP
-    ESP -->|"Captured Photo"| UP
-    UP --> ST
-    UP --> FS
-    UP --> CD
-    ESP -->|"Heartbeat every 30s"| HB
-    HB --> FS
-    FL -->|"Manual Trigger"| FS
-    FL -->|"Manual Trigger"| CD
-    FS <-->|"Realtime Listeners"| FL
+    ESP -->|"photo"| UP
+    UP -->|"store image"| ST
+    UP -->|"link image to alert"| FS
+    UP -->|"send image"| CD
+    ESP -->|"heartbeat<br/>every 30s"| HB
+    HB -->|"update device status"| FS
+    FL -->|"create alert (manual)"| FS
+    FL -->|"send location"| CD
+    FS <-->|"realtime listeners"| FL
 ```
+
+> **Note:** `processAudio()` talks to both **Storage** (to persist the `.wav` evidence) and **CircuitDigest** (since the audio file is delivered over WhatsApp too, not just the photo). **Firestore** is the source of truth for alerts (tagged `automatic` / `manual`) and contacts — both change frequently and are read by the app's realtime listeners.
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
 ```mermaid
 flowchart TD
-    A["🎙️ ESP32-S3 records 5s audio clip"] --> B["Send audio to processAudio()"]
-    B --> C["ElevenLabs Speech-to-Text"]
-    C --> D{"Trigger word<br/>'blueberry' detected?"}
-    D -- No --> A
-    D -- Yes --> E["Create Alert in Firestore<br/>type: automatic"]
-    E --> F["📸 ESP32-S3 captures photo"]
-    F --> G["Upload photo → uploadPhoto()"]
-    G --> H["Store image + audio in Firebase Storage"]
-    H --> I["Send WhatsApp Alert via CircuitDigest API"]
-    I --> J["✅ Contacts receive:<br/>Image URL + Audio .wav + Location + Timestamp"]
+    A["🎙️ Record 5s<br/>audio clip"] --> B["Send to<br/>processAudio()"]
+    B --> C["ElevenLabs STT<br/>generates transcript"]
+    C --> D{"Trigger word<br/>'blueberry' found?"}
+    D -- No --> W["⏱️ Wait 3s"] --> A
+    D -- Yes --> E["Create alert in Firestore<br/>(type: automatic)"]
+    E --> F["📸 Capture photo"]
+    F --> G["uploadPhoto()"]
+    G --> H["Store image + audio<br/>in Firebase Storage"]
+    H --> I["Send WhatsApp alert<br/>via CircuitDigest"]
+    I --> J["✅ Contacts receive:<br/>image + audio .wav<br/>+ location + timestamp"]
 
-    K["📱 User presses Manual SOS (hold 2s)"] --> L["Get live GPS location"]
-    L --> M["Create Alert in Firestore<br/>type: manual"]
-    M --> N["Send WhatsApp Alert via CircuitDigest API"]
-    N --> O["✅ Contacts receive:<br/>Location + Timestamp (no media, faster)"]
+    K["📱 Manual SOS<br/>(hold 2s)"] --> L["Get live<br/>GPS location"]
+    L --> M["Create alert in Firestore<br/>(type: manual)"]
+    M --> N["Send WhatsApp alert<br/>via CircuitDigest"]
+    N --> O["✅ Contacts receive:<br/>location + timestamp<br/>(no media, faster)"]
 ```
 
-> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts.
+> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. If no trigger word is found in a 5s clip, the device waits 3s before starting the next recording cycle.
 
 ---
 
@@ -139,7 +143,7 @@ flowchart TD
 | Microphone | PDM mic via `ESP_I2S` — Clock: GPIO 42, Data: GPIO 41 |
 | Camera | OV-series camera module (JPEG, VGA resolution, quality 12) |
 | Sample Rate | 16 kHz, mono, 16-bit |
-| Recording Window | 5 seconds per listening cycle |
+| Recording Window | 5 seconds per listening cycle, 3s pause between cycles if no trigger |
 | Connectivity | Wi-Fi (HTTPS to Firebase Cloud Functions) |
 | Heartbeat Interval | Every 30 seconds |
 
@@ -147,8 +151,8 @@ flowchart TD
 
 | Endpoint | Responsibility |
 |---|---|
-| `processAudio` | Receives `.wav` audio, sends to ElevenLabs STT, checks for trigger word, creates alert |
-| `uploadPhoto` | Receives JPEG photo, stores in Firebase Storage, links to alert, triggers WhatsApp send |
+| `processAudio` | Receives `.wav` audio, sends to ElevenLabs STT, checks for trigger word, creates alert, stores audio in Storage, sends audio via CircuitDigest |
+| `uploadPhoto` | Receives JPEG photo, stores in Firebase Storage, links to alert, triggers WhatsApp image send via CircuitDigest |
 | `heartbeat` | Updates device "last seen" timestamp in Firestore for online/offline status |
 
 ### 5.3 Mobile App — Flutter
@@ -186,26 +190,38 @@ SheAlert/
 └── README.md
 ```
 
-> ✏️ Update this tree to match your actual repo folder names before publishing.
+> ⚠️ **I can't verify this against your actual repo** since I don't have access to it — can you check it against your real folder names/paths and let me know if anything's off? I'll update it once you confirm.
 
 ---
 
 ## 📸 7. Screenshots / Demo
 
-<!-- Add screenshots or a demo GIF here -->
-| Home Page | History Page | Contacts Page |
-|---|---|---|
-| _add screenshot_ | _add screenshot_ | _add screenshot_ |
+### 📱 App
+
+| Home (Connected) | Home (Disconnected) | History | Contacts |
+|---|---|---|---|
+| _add screenshot_ | _add screenshot_ | _add screenshot_ | _add screenshot_ |
+
+### ☁️ Backend
+
+_add Firebase console / Cloud Functions logs screenshots here_
+
+### 💬 WhatsApp Notifications
+
+| Automatic Alert | Manual Alert |
+|---|---|
+| _add screenshot_ | _add screenshot_ |
 
 ---
 
 ## 📊 8. Results
 
-<!-- Fill in with real numbers once you have them, e.g.: -->
 - Average time from trigger word → WhatsApp alert (automatic mode): `TBD`
 - Average time for manual SOS delivery: `TBD`
 - Trigger word detection accuracy (test runs): `TBD`
 - Device uptime / heartbeat reliability: `TBD`
+
+> **Measuring sub-minute latency:** Report these in seconds (e.g. `4.2s`) rather than minutes — minutes won't give useful precision here. A simple way to get the number: log a timestamp the moment the trigger fires (audio sent to `processAudio()`, or the manual SOS button press) and another timestamp when the Firestore alert doc is written / the CircuitDigest API call returns success. Subtracting the two gives you the latency for that run. Do this over ~10–20 runs and average. If you'd rather not add logging, a stopwatch or screen recording from trigger to phone notification arriving works too, just less precise.
 
 ---
 
@@ -225,10 +241,6 @@ SheAlert/
 - 📈 Analytics dashboard for alert trends over time
 
 ---
-
-## 📄 License
-
-This project is licensed under the MIT License.
 
 ## 🙋 Author
 
