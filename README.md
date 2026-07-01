@@ -62,51 +62,17 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 
 ### 4.1 Component Architecture
 
-```mermaid
-graph LR
-    subgraph Hardware["🔌 Hardware"]
-        ESP["XIAO ESP32-S3 Sense<br/>Mic + Camera"]
-    end
+<div align="center">
 
-    subgraph Backend["☁️ Backend — index.js"]
-        PA["processAudio()"]
-        UP["uploadPhoto()"]
-        HB["heartbeat()"]
-    end
+![SheAlert Architecture](docs/screenshots/architecture.svg)
 
-    subgraph FB["🔥 Firebase"]
-        FS[("Firestore<br/>Alerts (auto/manual) + Contacts")]
-        ST[("Storage<br/>Images + Audio")]
-    end
+</div>
 
-    subgraph External["🌐 External APIs"]
-        EL["ElevenLabs<br/>Speech-to-Text"]
-        CD["CircuitDigest<br/>WhatsApp API"]
-    end
+Both alert paths run independently and converge on the same Firebase + WhatsApp backend:
 
-    subgraph Mobile["📱 Flutter App"]
-        FL["Home / History / Contacts"]
-    end
-
-    ESP -->|"audio .wav<br/>every 5s"| PA
-    PA -->|"transcribe"| EL
-    EL -->|"transcript"| PA
-    PA -->|"trigger found →<br/>create alert (auto)"| FS
-    PA -->|"store .wav"| ST
-    PA -->|"send .wav"| CD
-    PA -->|"alertId"| ESP
-    ESP -->|"photo"| UP
-    UP -->|"store image"| ST
-    UP -->|"link image to alert"| FS
-    UP -->|"send image"| CD
-    ESP -->|"heartbeat<br/>every 30s"| HB
-    HB -->|"update device status"| FS
-    FL -->|"create alert (manual)"| FS
-    FL -->|"send location"| CD
-    FS <-->|"realtime listeners"| FL
-```
-
-> **Note:** `processAudio()` talks to both **Storage** (to persist the `.wav` evidence) and **CircuitDigest** (since the audio file is delivered over WhatsApp too, not just the photo). **Firestore** is the source of truth for alerts (tagged `automatic` / `manual`) and contacts — both change frequently and are read by the app's realtime listeners.
+- **Automatic path** (teal): the ESP32-S3 records audio and photo → `processAudio()` transcribes and checks for the trigger word → `uploadPhoto()` stores the evidence and notifies contacts.
+- **Manual path** (orange): the Flutter app captures a 2-second SOS hold → fetches a live GPS fix → sends the alert straight to the backend, skipping evidence capture for speed.
+- **Shared backend** (gray): Firestore holds alerts and contacts, Storage holds images/audio, and CircuitDigest delivers everything over WhatsApp.
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
@@ -187,10 +153,11 @@ SheAlert/
 │       └── pubspec.yaml
 ├── docs/
 │   └── screenshots/
+│       └── architecture.svg
 └── README.md
 ```
 
-> ⚠️ **I can't verify this against your actual repo** since I don't have access to it — can you check it against your real folder names/paths and let me know if anything's off? I'll update it once you confirm.
+> ⚠️ **Heads up on the `backend/` folder:** Firebase Cloud Functions initialized through VSCode's `firebase init functions` normally default to a folder named **`functions/`**, not `backend/`. If your `firebase.json` doesn't explicitly set `"source": "backend"`, `firebase deploy` will look in the wrong place. Double-check your real repo and either rename the folder or confirm the custom source path is set. I can't see your actual VSCode workspace, so please verify this against what you actually have and let me know if it needs adjusting.
 
 ---
 
@@ -214,24 +181,20 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ---
 
-## 📊 8. Results
+## 🎯 8. Key Learnings
 
-- Average time from trigger word → WhatsApp alert (automatic mode): `TBD`
-- Average time for manual SOS delivery: `TBD`
-- Trigger word detection accuracy (test runs): `TBD`
-- Device uptime / heartbeat reliability: `TBD`
-
-> **Measuring sub-minute latency:** Report these in seconds (e.g. `4.2s`) rather than minutes — minutes won't give useful precision here. A simple way to get the number: log a timestamp the moment the trigger fires (audio sent to `processAudio()`, or the manual SOS button press) and another timestamp when the Firestore alert doc is written / the CircuitDigest API call returns success. Subtracting the two gives you the latency for that run. Do this over ~10–20 runs and average. If you'd rather not add logging, a stopwatch or screen recording from trigger to phone notification arriving works too, just less precise.
-
----
-
-## 🎯 9. Key Learnings
-
-<!-- e.g.: handling I2S mic streaming on ESP32-S3, balancing evidence-richness vs speed in emergency UX, working with Firebase Cloud Functions regions, integrating third-party STT & WhatsApp APIs -->
+- ⚖️ **Evidence vs. speed tradeoff** — designing two distinct alert paths (rich evidence vs. near-instant delivery) instead of one-size-fits-all, since emergency UX has to account for both "I need proof" and "I need help now" scenarios.
+- 🎙️ **I2S/PDM microphone streaming on ESP32-S3** — capturing clean 16kHz mono audio continuously without blocking the camera or Wi-Fi stack.
+- ☁️ **Chaining cloud STT into a trigger-word pipeline** — using ElevenLabs for transcription instead of on-device wake-word detection meant handling network latency, retries, and cost per call rather than running inference locally.
+- 🔗 **Multi-service orchestration** — coordinating a single alert event across ESP32 firmware, Cloud Functions, Firestore, Storage, and a third-party WhatsApp API without losing consistency if any one step fails.
+- 💓 **Heartbeat pattern for device presence** — using periodic pings + Firestore timestamps to derive "online/offline" state instead of relying on a persistent connection.
+- 🌍 **Firebase Cloud Functions regions** — deploying to `asia-southeast1` and how region choice affects latency for both the device and the mobile app's realtime listeners.
+- 🔐 **Handling third-party API keys safely** — keeping ElevenLabs and CircuitDigest credentials out of the firmware and mobile app, isolated inside Cloud Functions via `.env`.
+- 🧠 **Designing against false triggers** — using a hold-to-confirm (2s) gesture for manual SOS and a fixed trigger phrase for automatic mode, both aimed at reducing accidental alerts in a safety-critical context.
 
 ---
 
-## 🚀 10. Future Improvements
+## 🚀 9. Future Improvements
 
 - 🔐 Add user authentication (currently single-user, no login)
 - 🔋 Battery-optimized / low-power listening mode for the ESP32-S3
