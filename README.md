@@ -20,7 +20,7 @@
 
 **SheAlert** is a real-time women's safety monitoring system that combines a wearable/embedded hardware device with a mobile app to send emergency alerts through two modes:
 
-- 🎙️ **Automatic Mode** — Continuously listens for a secret trigger word ("**blueberry**"). Once detected, it captures a photo, records audio evidence, and instantly notifies emergency contacts over WhatsApp with location and timestamp.
+- 🎙️ **Automatic Mode** — Continuously listens for a secret trigger word ("**blueberry**"). Once detected, it captures a photo, records audio evidence, and instantly notifies emergency contacts over WhatsApp with **location, timestamp, and evidence (image URL and audio `.wav` file)**.
 - 🆘 **Manual Mode** — A press-and-hold SOS button in the companion Flutter app for situations where speed matters more than evidence, sending just live location and timestamp.
 
 The system is designed around a simple principle: **automatic mode maximizes evidence, manual mode maximizes speed.**
@@ -50,7 +50,7 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 | **Firmware** | Arduino (C++), `esp_camera`, `ESP_I2S` | Records audio, controls camera, sends heartbeat |
 | **Backend** | Node.js (Firebase Cloud Functions) — `index.js` | Processes audio, manages alerts, uploads media |
 | **Speech-to-Text** | ElevenLabs API | Converts recorded audio to text for trigger detection |
-| **Database** | Firebase Firestore | Stores alerts, device status, contacts |
+| **Database** | Firebase Firestore | Stores alerts (classified automatic/manual) & contacts |
 | **File Storage** | Firebase Storage | Stores captured images & `.wav` audio files |
 | **Notifications** | CircuitDigest Cloud API | Sends WhatsApp alerts to emergency contacts |
 | **Mobile App** | Flutter (Dart) | Home, History, and Contacts management UI |
@@ -68,64 +68,69 @@ graph LR
         ESP["XIAO ESP32-S3 Sense<br/>Mic + Camera"]
     end
 
-    subgraph Backend["☁️ Backend — index.js (Firebase Cloud Functions)"]
+    subgraph Backend["☁️ Backend — index.js<br/>Firebase Cloud Functions"]
         PA["processAudio()"]
         UP["uploadPhoto()"]
         HB["heartbeat()"]
     end
 
     subgraph FB["🔥 Firebase"]
-        FS[("Firestore")]
-        ST[("Storage")]
+        FS[("Firestore<br/>Alerts + Contacts")]
+        ST[("Storage<br/>Images + Audio")]
     end
 
     subgraph External["🌐 External APIs"]
         EL["ElevenLabs<br/>Speech-to-Text"]
-        CD["CircuitDigest Cloud API<br/>WhatsApp Notifications"]
+        CD["CircuitDigest<br/>WhatsApp API"]
     end
 
     subgraph Mobile["📱 Flutter App"]
-        FL["Home / History / Contacts"]
+        FL["Home / History<br/>/ Contacts"]
     end
 
-    ESP -->|"Audio .wav (every 5s)"| PA
-    PA --> EL
-    EL --> PA
-    PA -->|"trigger word found"| FS
+    ESP -->|"Audio .wav<br/>every 5s"| PA
+    PA -->|"transcribe"| EL
+    EL -->|"transcript"| PA
+    PA -->|"trigger word found<br/>create alert: automatic"| FS
+    PA -->|"store audio .wav"| ST
+    PA -->|"send WhatsApp alert<br/>with audio"| CD
     PA -->|"alertId"| ESP
     ESP -->|"Captured Photo"| UP
-    UP --> ST
-    UP --> FS
-    UP --> CD
-    ESP -->|"Heartbeat every 30s"| HB
-    HB --> FS
-    FL -->|"Manual Trigger"| FS
+    UP -->|"store photo"| ST
+    UP -->|"update alert"| FS
+    UP -->|"send WhatsApp alert<br/>with photo"| CD
+    ESP -->|"Heartbeat<br/>every 30s"| HB
+    HB -->|"update status"| FS
+    FL -->|"Manual Trigger<br/>create alert: manual"| FS
     FL -->|"Manual Trigger"| CD
     FS <-->|"Realtime Listeners"| FL
 ```
+
+> **Note:** `processAudio()` is not just a trigger check — since the `.wav` file is itself sent as part of the automatic WhatsApp alert, it also writes to **Storage** and calls the **CircuitDigest** API directly, in addition to creating the alert record in **Firestore**. Firestore's role is mainly to hold the dynamic, frequently-changing data: the alert log (tagged `automatic` / `manual`) and the emergency contacts list — the actual media (photos, audio) lives in Storage.
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
 ```mermaid
 flowchart TD
-    A["🎙️ ESP32-S3 records 5s audio clip"] --> B["Send audio to processAudio()"]
-    B --> C["ElevenLabs Speech-to-Text"]
-    C --> D{"Trigger word<br/>'blueberry' detected?"}
-    D -- No --> A
+    A["🎙️ ESP32-S3 records<br/>5s audio clip"] --> B["Send audio to<br/>processAudio()"]
+    B --> C["ElevenLabs Speech-to-Text<br/>generates transcript"]
+    C --> D{"Trigger word<br/>'blueberry'<br/>detected?"}
+    D -- No --> W["⏳ Wait 3s"]
+    W --> A
     D -- Yes --> E["Create Alert in Firestore<br/>type: automatic"]
-    E --> F["📸 ESP32-S3 captures photo"]
-    F --> G["Upload photo → uploadPhoto()"]
-    G --> H["Store image + audio in Firebase Storage"]
-    H --> I["Send WhatsApp Alert via CircuitDigest API"]
-    I --> J["✅ Contacts receive:<br/>Image URL + Audio .wav + Location + Timestamp"]
+    E --> F["📸 ESP32-S3<br/>captures photo"]
+    F --> G["Upload photo →<br/>uploadPhoto()"]
+    G --> H["Store image + audio<br/>in Firebase Storage"]
+    H --> I["Send WhatsApp Alert<br/>via CircuitDigest API"]
+    I --> J["✅ Contacts receive:<br/>Image URL + Audio .wav<br/>+ Location + Timestamp"]
 
-    K["📱 User presses Manual SOS (hold 2s)"] --> L["Get live GPS location"]
+    K["📱 User presses<br/>Manual SOS (hold 2s)"] --> L["Get live<br/>GPS location"]
     L --> M["Create Alert in Firestore<br/>type: manual"]
-    M --> N["Send WhatsApp Alert via CircuitDigest API"]
-    N --> O["✅ Contacts receive:<br/>Location + Timestamp (no media, faster)"]
+    M --> N["Send WhatsApp Alert<br/>via CircuitDigest API"]
+    N --> O["✅ Contacts receive:<br/>Location + Timestamp<br/>(no media, faster)"]
 ```
 
-> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts.
+> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. Each listening cycle records for **5 seconds**, transcribes and checks for the trigger word, and if not found, **waits 3 seconds** before starting the next recording cycle.
 
 ---
 
@@ -139,7 +144,7 @@ flowchart TD
 | Microphone | PDM mic via `ESP_I2S` — Clock: GPIO 42, Data: GPIO 41 |
 | Camera | OV-series camera module (JPEG, VGA resolution, quality 12) |
 | Sample Rate | 16 kHz, mono, 16-bit |
-| Recording Window | 5 seconds per listening cycle |
+| Recording Window | 5 seconds per listening cycle, with a 3-second pause before the next cycle if no trigger word is found |
 | Connectivity | Wi-Fi (HTTPS to Firebase Cloud Functions) |
 | Heartbeat Interval | Every 30 seconds |
 
@@ -147,8 +152,8 @@ flowchart TD
 
 | Endpoint | Responsibility |
 |---|---|
-| `processAudio` | Receives `.wav` audio, sends to ElevenLabs STT, checks for trigger word, creates alert |
-| `uploadPhoto` | Receives JPEG photo, stores in Firebase Storage, links to alert, triggers WhatsApp send |
+| `processAudio` | Receives `.wav` audio, sends to ElevenLabs STT, checks for trigger word, creates alert in Firestore, stores audio in Storage, and triggers the WhatsApp alert via CircuitDigest |
+| `uploadPhoto` | Receives JPEG photo, stores in Firebase Storage, links to alert, triggers WhatsApp send with the photo |
 | `heartbeat` | Updates device "last seen" timestamp in Firestore for online/offline status |
 
 ### 5.3 Mobile App — Flutter
