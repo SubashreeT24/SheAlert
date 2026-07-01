@@ -63,84 +63,59 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 ### 4.1 Component Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 45, "rankSpacing": 60, "htmlLabels": true}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 35, "rankSpacing": 50, "htmlLabels": true}}}%%
 graph LR
-    subgraph Hardware["🔌 Hardware"]
-        ESP["XIAO ESP32-S3<br/>Mic + Camera"]
-    end
+    ESP["📷 XIAO ESP32-S3"]
+    PA["processAudio"]
+    UP["uploadPhoto"]
+    HB["heartbeat"]
+    FS[("Firestore")]
+    ST[("Storage")]
+    EL["ElevenLabs"]
+    CD["CircuitDigest"]
+    FL["📱 Flutter App"]
 
-    subgraph Backend["☁️ Backend — index.js"]
-        PA["processAudio()"]
-        UP["uploadPhoto()"]
-        HB["heartbeat()"]
-    end
-
-    subgraph FB["🔥 Firebase"]
-        FS[("Firestore<br/>alerts + contacts")]
-        ST[("Storage<br/>images + audio")]
-    end
-
-    subgraph External["🌐 External APIs"]
-        EL["ElevenLabs<br/>Speech-to-Text"]
-        CD["CircuitDigest<br/>WhatsApp API"]
-    end
-
-    subgraph Mobile["📱 Flutter App"]
-        FL["Home / History<br/>/ Contacts"]
-    end
-
-    ESP -->|"5s audio<br/>clip"| PA
-    PA --> EL
-    EL -->|"transcript"| PA
-    PA -->|"trigger found:<br/>create alert<br/>(automatic)"| FS
-    PA -->|"store<br/>audio .wav"| ST
-    PA -->|"send WhatsApp<br/>audio + loc + time"| CD
-    PA -->|"alertId"| ESP
-    ESP -->|"captured<br/>photo"| UP
-    UP -->|"store<br/>photo"| ST
-    UP -->|"update alert<br/>with photo URL"| FS
-    UP -->|"send WhatsApp<br/>image"| CD
-    ESP -->|"heartbeat<br/>every 30s"| HB
-    HB -->|"update<br/>last-seen"| FS
-    FL -->|"manual trigger:<br/>create alert<br/>(manual)"| FS
-    FL -->|"send WhatsApp<br/>loc + time"| CD
-    FS <-->|"realtime<br/>listeners"| FL
+    ESP -->|audio| PA
+    ESP -->|photo| UP
+    ESP -->|30s ping| HB
+    PA -->|STT| EL
+    PA & UP -->|WhatsApp| CD
+    PA & UP & HB --> FS
+    PA & UP --> ST
+    FL -->|manual alert| FS
+    FL -->|WhatsApp| CD
+    FS <-.->|realtime| FL
 ```
 
-> `processAudio` handles the trigger detection, creates the alert, stores the `.wav` in Storage, and sends the first WhatsApp message (audio + location + timestamp). `uploadPhoto` then stores the photo, updates that same alert with the photo URL, and sends the image over WhatsApp too. Firestore is mainly the source of truth for alerts (tagged automatic/manual) and contacts — both of which the Flutter app listens to in realtime.
+> `processAudio` handles trigger detection, creates the alert, stores the `.wav` in Storage, and sends the first WhatsApp message (audio + location + timestamp). `uploadPhoto` then stores the photo, updates that same alert with the photo URL, and sends the image over WhatsApp too. Firestore is the source of truth for alerts (tagged automatic/manual) and contacts — both of which the Flutter app listens to in realtime.
 
-### 4.2 Alert Flow — Automatic Mode
-
-```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "htmlLabels": true}}}%%
-flowchart TD
-    A["🎙️ Record 5s<br/>audio clip"] --> B["Send to<br/>processAudio()"]
-    B --> C["ElevenLabs<br/>transcribes clip"]
-    C --> D{"Trigger word<br/>'blueberry'<br/>found?"}
-    D -- No --> W["⏳ Wait 3s"] --> A
-    D -- Yes --> E["Create alert<br/>in Firestore<br/>(automatic)"]
-    E --> F["Store audio .wav<br/>in Storage"]
-    F --> G["Send WhatsApp<br/>audio + loc + time"]
-    G --> H["📸 Capture photo"]
-    H --> I["Store photo<br/>in Storage"]
-    I --> J["Update alert +<br/>send WhatsApp image"]
-    J --> K["✅ Contact has full<br/>evidence + location"]
-```
-
-### 4.3 Alert Flow — Manual Mode
+### 4.2 Alert Flow — Automatic vs. Manual
 
 ```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "htmlLabels": true}}}%%
-flowchart TD
-    L["📱 Hold SOS<br/>button (2s)"] --> M["Get live<br/>GPS location"]
-    M --> N["Create alert<br/>in Firestore<br/>(manual)"]
-    N --> O["Send WhatsApp<br/>loc + time"]
-    O --> P["✅ Contact gets<br/>location, no media"]
+%%{init: {"flowchart": {"nodeSpacing": 30, "rankSpacing": 35, "htmlLabels": true}}}%%
+flowchart LR
+    subgraph AUTO["🎙️ Automatic Mode"]
+    direction TB
+        A1["Record 5s audio"] --> A2["Transcribe"]
+        A2 --> A3{"'blueberry'?"}
+        A3 -- No --> A1
+        A3 -- Yes --> A4["Create alert"]
+        A4 --> A5["Store audio +<br/>send WhatsApp"]
+        A5 --> A6["Capture photo"]
+        A6 --> A7["Update alert +<br/>send image"]
+    end
+
+    subgraph MANUAL["🆘 Manual Mode"]
+    direction TB
+        M1["Hold SOS 2s"] --> M2["Get GPS"]
+        M2 --> M3["Create alert"]
+        M3 --> M4["Send WhatsApp"]
+    end
 ```
 
 > **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, storage, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts.
 >
-> Each automatic listening cycle: **record 5 seconds → transcribe → check for the trigger word → if not found, wait 3 seconds → start the next recording cycle.**
+> Each automatic listening cycle: **record 5 seconds → transcribe → check for the trigger word → if not found, wait 3 seconds → start the next cycle.**
 
 ---
 
@@ -201,7 +176,12 @@ SheAlert/
 └── README.md
 ```
 
-> ⚠️ I still can't check this against your real repo — I don't have access to it. Paste your actual folder listing (e.g. `tree -L 3` output) or upload the project and I'll verify/correct this section for you.
+<details>
+<summary>⚠️ Note on this structure</summary>
+
+This is inferred, not verified against the actual repo. Paste your real folder listing (e.g. `tree -L 3` output) or upload the project and this section can be corrected to match.
+
+</details>
 
 ---
 
@@ -221,17 +201,21 @@ SheAlert/
 
 ## 📊 8. Results
 
-<!--
+<details>
+<summary>📐 How to measure these (click to expand)</summary>
+
 Measuring end-to-end latency when it's under a minute: report it in seconds (e.g. "~38s avg"), not forced into minute format.
+
 Log a server timestamp at each stage and take the delta:
-  1. t0 = ESP32-S3 starts recording (or manual SOS button press)
-  2. t1 = processAudio (or manual path) receives the request
-  3. t2 = ElevenLabs transcript returned (automatic only)
-  4. t3 = Firestore alert document created
-  5. t4 = CircuitDigest WhatsApp API call returns success
-Compute (t4 - t0) in ms, convert to seconds, average over ~10-15 trials per mode.
-Use Firestore's FieldValue.serverTimestamp() to avoid clock drift between device/backend/phone.
--->
+1. `t0` = ESP32-S3 starts recording (or manual SOS button press)
+2. `t1` = processAudio (or manual path) receives the request
+3. `t2` = ElevenLabs transcript returned (automatic only)
+4. `t3` = Firestore alert document created
+5. `t4` = CircuitDigest WhatsApp API call returns success
+
+Compute `(t4 - t0)` in ms, convert to seconds, average over ~10–15 trials per mode. Use Firestore's `FieldValue.serverTimestamp()` to avoid clock drift between device/backend/phone.
+
+</details>
 
 - Average time from trigger word → WhatsApp alert (automatic mode): `TBD`
 - Average time for manual SOS delivery: `TBD`
