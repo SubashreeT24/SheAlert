@@ -34,15 +34,11 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 ## ✨ 2. Features
 
 - Continuous audio monitoring with wake-word detection (trigger word: `blueberry`)
-- Automatic photo capture on trigger via onboard ESP32-S3 camera
-- Audio evidence recording (`.wav`) alongside every automatic alert
-- Real-time GPS location tracking in the mobile app
-- Instant WhatsApp alerts with image, audio, location & timestamp
+- Automatic photo + audio evidence capture on trigger, sent via WhatsApp with location & timestamp
 - One-touch **Manual SOS** (2-second press) for fast, evidence-free alerts
 - Heartbeat-based device connectivity status (device online/offline)
-- Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete with confirmation)
+- Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete)
 - Alert history with Manual / Automatic / All filters + weekly stats
-- Realtime sync between hardware, backend, and mobile app via Firebase
 
 ---
 
@@ -202,12 +198,10 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ## 🎯 8. Key Learnings
 
-- **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio in fixed windows without blocking the camera/Wi-Fi tasks running on the same chip
-- **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about when evidence-richness matters more than raw speed in an emergency UX
-- **Wiring third-party APIs into one pipeline** — chaining ElevenLabs STT → Firestore → Firebase Storage → CircuitDigest Cloud into a single reliable alert flow
-- **Firebase Cloud Functions config quirks** — structuring functions so hardware, backend, and app all agree on the same project config and region
-- **Realtime state across three layers** — keeping hardware heartbeat, backend alert creation, and Flutter's Firestore listeners in sync so the app always reflects live device/alert status
-- **Handling failure gracefully** — deciding what happens when no trigger word is detected, when uploads fail, or when the device goes offline, without silently dropping an alert
+- **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio without blocking the camera/Wi-Fi tasks on the same chip
+- **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about evidence vs. speed in an emergency UX
+- **Wiring third-party APIs into one pipeline** — chaining ElevenLabs STT → Firestore → Storage → CircuitDigest Cloud into a single reliable alert flow
+- **Realtime state across three layers** — keeping hardware, backend, and the Flutter app in sync via Firestore listeners
 
 ---
 
