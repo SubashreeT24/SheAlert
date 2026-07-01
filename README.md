@@ -48,12 +48,12 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 |---|---|---|
 | **Hardware** | XIAO ESP32-S3 Sense (Camera + PDM Mic) | Captures audio continuously & photo on trigger |
 | **Firmware** | Arduino (C++), `esp_camera`, `ESP_I2S` | Records audio, controls camera, sends heartbeat |
-| **Backend** | Node.js (Firebase Cloud Functions) — `functions/index.js` | Processes audio, manages alerts, uploads media |
+| **Backend** | Node.js (Firebase Cloud Functions) — `index.js` | Processes audio, manages alerts, uploads media |
 | **Speech-to-Text** | ElevenLabs API | Converts recorded audio to text for trigger detection |
 | **Database** | Firebase Firestore | Stores alerts (classified automatic/manual) & contacts |
 | **File Storage** | Firebase Storage | Stores captured images & `.wav` audio files |
 | **Notifications** | CircuitDigest Cloud API | Sends WhatsApp alerts to emergency contacts |
-| **Mobile App** | Flutter (Dart) — `lib/screens/` | Home, History, and Contacts management UI |
+| **Mobile App** | Flutter (Dart) | Home, History, and Contacts management UI |
 | **Realtime Sync** | Firebase Firestore listeners | Live device status & alert history updates |
 
 ---
@@ -62,7 +62,7 @@ The system is designed around a simple principle: **automatic mode maximizes evi
 
 ### 4.1 Component Architecture
 
-mermaid
+```mermaid
 graph LR
     subgraph Hardware["🔌 Hardware"]
         ESP["XIAO ESP32-S3 Sense<br/>Mic + Camera"]
@@ -104,7 +104,9 @@ graph LR
     FL -->|"create alert (manual)"| FS
     FL -->|"send location"| CD
     FS <-->|"realtime listeners"| FL
+```
 
+> **Note:** `processAudio()` talks to both **Storage** (to persist the `.wav` evidence) and **CircuitDigest** (since the audio file is delivered over WhatsApp too, not just the photo). **Firestore** is the source of truth for alerts (tagged `automatic` / `manual`) and contacts — both change frequently and are read by the app's realtime listeners.
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
@@ -145,7 +147,7 @@ flowchart TD
 | Connectivity | Wi-Fi (HTTPS to Firebase Cloud Functions) |
 | Heartbeat Interval | Every 30 seconds |
 
-### 5.2 Backend — `functions/index.js` (Firebase Cloud Functions, `asia-southeast1`)
+### 5.2 Backend — `index.js` (Firebase Cloud Functions, `asia-southeast1`)
 
 | Endpoint | Responsibility |
 |---|---|
@@ -167,42 +169,28 @@ flowchart TD
 
 ```
 SheAlert/
-├── she_alert_app/                      # Flutter mobile app
-│   ├── android/
-│   ├── assets/
-│   ├── lib/
-│   │   ├── models/
-│   │   ├── screens/
-│   │   │   ├── home_screen.dart
-│   │   │   ├── history_screen.dart
-│   │   │   └── contacts_screen.dart
-│   │   ├── services/
-│   │   ├── theme/
-│   │   ├── widgets/
-│   │   ├── firebase_options.dart
-│   │   └── main.dart
-│   ├── test/
-│   ├── web/
-│   ├── .firebaserc
-│   ├── firebase.json
-│   ├── pubspec.yaml
-│   └── pubspec.lock
-├── she_alert_backend/                  # Firebase Cloud Functions
-│   ├── functions/
-│   │   ├── index.js                    # processAudio, uploadPhoto, heartbeat
-│   │   ├── package.json
-│   │   └── .env                        # API keys (ElevenLabs, CircuitDigest) — not committed
-│   ├── .firebaserc
-│   └── firebase.json
-├── she_alert_firmware/                 # Arduino firmware
-│   └── shealertfirmware.ino
+├── firmware/
+│   └── shealert_esp32s3/
+│       └── shealert_esp32s3.ino        # Arduino firmware (mic + camera + heartbeat)
+├── backend/
+│   ├── index.js                        # Firebase Cloud Functions (processAudio, uploadPhoto, heartbeat)
+│   ├── package.json
+│   └── .env                            # API keys (ElevenLabs, CircuitDigest) — not committed
+├── mobile_app/
+│   └── shealert_flutter/
+│       ├── lib/
+│       │   ├── pages/
+│       │   │   ├── home_page.dart
+│       │   │   ├── history_page.dart
+│       │   │   └── contacts_page.dart
+│       │   └── main.dart
+│       └── pubspec.yaml
 ├── docs/
 │   └── screenshots/
-│       └── architecture.svg
 └── README.md
 ```
 
-> Verified against the actual VSCode workspace — the three components (`she_alert_app`, `she_alert_backend`, `she_alert_firmware`) sit directly at the project root, and Cloud Functions code correctly lives inside `she_alert_backend/functions/`. Build artifacts, IDE files (`.dart_tool`, `.idea`, `build`, `.metadata`), lockfiles, and local testing/seed scripts (`harness.js`, `seed.js`, `emulator-data/`) are omitted here for clarity since they're either generated or dev-only.
+> ⚠️ **I can't verify this against your actual repo** since I don't have access to it — can you check it against your real folder names/paths and let me know if anything's off? I'll update it once you confirm.
 
 ---
 
@@ -226,20 +214,24 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ---
 
-## 🎯 8. Key Learnings
+## 📊 8. Results
 
-- ⚖️ **Evidence vs. speed tradeoff** — designing two distinct alert paths (rich evidence vs. near-instant delivery) instead of one-size-fits-all, since emergency UX has to account for both "I need proof" and "I need help now" scenarios.
-- 🎙️ **I2S/PDM microphone streaming on ESP32-S3** — capturing clean 16kHz mono audio continuously without blocking the camera or Wi-Fi stack.
-- ☁️ **Chaining cloud STT into a trigger-word pipeline** — using ElevenLabs for transcription instead of on-device wake-word detection meant handling network latency, retries, and cost per call rather than running inference locally.
-- 🔗 **Multi-service orchestration** — coordinating a single alert event across ESP32 firmware, Cloud Functions, Firestore, Storage, and a third-party WhatsApp API without losing consistency if any one step fails.
-- 💓 **Heartbeat pattern for device presence** — using periodic pings + Firestore timestamps to derive "online/offline" state instead of relying on a persistent connection.
-- 🌍 **Firebase Cloud Functions regions** — deploying to `asia-southeast1` and how region choice affects latency for both the device and the mobile app's realtime listeners.
-- 🔐 **Handling third-party API keys safely** — keeping ElevenLabs and CircuitDigest credentials out of the firmware and mobile app, isolated inside Cloud Functions via `.env`.
-- 🧠 **Designing against false triggers** — using a hold-to-confirm (2s) gesture for manual SOS and a fixed trigger phrase for automatic mode, both aimed at reducing accidental alerts in a safety-critical context.
+- Average time from trigger word → WhatsApp alert (automatic mode): `TBD`
+- Average time for manual SOS delivery: `TBD`
+- Trigger word detection accuracy (test runs): `TBD`
+- Device uptime / heartbeat reliability: `TBD`
+
+> **Measuring sub-minute latency:** Report these in seconds (e.g. `4.2s`) rather than minutes — minutes won't give useful precision here. A simple way to get the number: log a timestamp the moment the trigger fires (audio sent to `processAudio()`, or the manual SOS button press) and another timestamp when the Firestore alert doc is written / the CircuitDigest API call returns success. Subtracting the two gives you the latency for that run. Do this over ~10–20 runs and average. If you'd rather not add logging, a stopwatch or screen recording from trigger to phone notification arriving works too, just less precise.
 
 ---
 
-## 🚀 9. Future Improvements
+## 🎯 9. Key Learnings
+
+<!-- e.g.: handling I2S mic streaming on ESP32-S3, balancing evidence-richness vs speed in emergency UX, working with Firebase Cloud Functions regions, integrating third-party STT & WhatsApp APIs -->
+
+---
+
+## 🚀 10. Future Improvements
 
 - 🔐 Add user authentication (currently single-user, no login)
 - 🔋 Battery-optimized / low-power listening mode for the ESP32-S3
