@@ -2,7 +2,11 @@
 
 # 🛡️ SheAlert
 
-### A Women Safety Monitoring System — Voice-Triggered & Manual SOS with Live Evidence Capture
+<img src="assets/app_icon.png" alt="SheAlert App Icon" width="120"/>
+
+### *Your Safety, Your Control*
+
+A Women Safety Monitoring System — Voice-Triggered & Manual SOS with Live Evidence Capture
 
 ![Arduino](https://img.shields.io/badge/Arduino-00979D?style=for-the-badge&logo=arduino&logoColor=white)
 ![Flutter](https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&logo=flutter&logoColor=white)
@@ -29,16 +33,16 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 
 ## ✨ 2. Features
 
-- 🔊 Continuous audio monitoring with wake-word detection (trigger word: `blueberry`)
-- 📸 Automatic photo capture on trigger via onboard ESP32-S3 camera
-- 🎤 Audio evidence recording (`.wav`) alongside every automatic alert
-- 📍 Real-time GPS location tracking in the mobile app
-- 📲 Instant WhatsApp alerts with image, audio, location & timestamp
-- ⚡ One-touch **Manual SOS** (2-second press) for fast, evidence-free alerts
-- 💓 Heartbeat-based device connectivity status (device online/offline)
-- 👥 Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete with confirmation)
-- 📊 Alert history with Manual / Automatic / All filters + weekly stats
-- ☁️ Realtime sync between hardware, backend, and mobile app via Firebase
+- Continuous audio monitoring with wake-word detection (trigger word: `blueberry`)
+- Automatic photo capture on trigger via onboard ESP32-S3 camera
+- Audio evidence recording (`.wav`) alongside every automatic alert
+- Real-time GPS location tracking in the mobile app
+- Instant WhatsApp alerts with image, audio, location & timestamp
+- One-touch **Manual SOS** (2-second press) for fast, evidence-free alerts
+- Heartbeat-based device connectivity status (device online/offline)
+- Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete with confirmation)
+- Alert history with Manual / Automatic / All filters + weekly stats
+- Realtime sync between hardware, backend, and mobile app via Firebase
 
 ---
 
@@ -62,7 +66,7 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 
 ```mermaid
 flowchart TD
-    subgraph AUTO["🟢 Automatic Alert — trigger word 'blueberry'"]
+    subgraph AUTO["Automatic Alert — trigger word 'blueberry'"]
         direction TB
         A1["ESP32-S3<br/>Records audio + photo"]
         A2["processAudio()<br/>Transcribe & check trigger"]
@@ -70,14 +74,14 @@ flowchart TD
         A1 --> A2 --> A3
     end
 
-    subgraph MANUAL["🔴 Manual Alert — SOS held 2s"]
+    subgraph MANUAL["Manual Alert — SOS held 2s"]
         direction TB
         M1["Flutter App<br/>Hold SOS button"]
         M2["Get GPS Location<br/>Live location fix"]
         M1 --> M2
     end
 
-    subgraph SHARED["☁️ Shared Backend — Firebase + CircuitDigest Cloud API"]
+    subgraph SHARED["Shared Backend — Firebase + CircuitDigest Cloud API"]
         direction LR
         F[("Firestore<br/>Alerts + Contacts")]
         S[("Storage<br/>Images + Audio")]
@@ -86,6 +90,13 @@ flowchart TD
 
     A3 -->|"alert + evidence"| SHARED
     M2 -->|"alert + location"| SHARED
+
+    classDef auto fill:#0f5132,stroke:#0a3d26,color:#fff
+    classDef manual fill:#7a1f1f,stroke:#5c1717,color:#fff
+    classDef shared fill:#0d3b66,stroke:#092a49,color:#fff
+    class A1,A2,A3 auto
+    class M1,M2 manual
+    class F,S,C shared
 ```
 
 ### How it works
@@ -191,12 +202,12 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ## 🎯 8. Key Learnings
 
-- 🎙️ **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio in fixed windows without blocking the camera/Wi-Fi tasks running on the same chip
-- ⚖️ **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about when evidence-richness matters more than raw speed in an emergency UX
-- 🔗 **Wiring third-party APIs into one pipeline** — chaining ElevenLabs STT → Firestore → Firebase Storage → CircuitDigest Cloud into a single reliable alert flow
-- ☁️ **Firebase Cloud Functions config quirks** — structuring functions so hardware, backend, and app all agree on the same project config and region
-- 🔄 **Realtime state across three layers** — keeping hardware heartbeat, backend alert creation, and Flutter's Firestore listeners in sync so the app always reflects live device/alert status
-- 🛡️ **Handling failure gracefully** — deciding what happens when no trigger word is detected, when uploads fail, or when the device goes offline, without silently dropping an alert
+- **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio in fixed windows without blocking the camera/Wi-Fi tasks running on the same chip
+- **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about when evidence-richness matters more than raw speed in an emergency UX
+- **Wiring third-party APIs into one pipeline** — chaining ElevenLabs STT → Firestore → Firebase Storage → CircuitDigest Cloud into a single reliable alert flow
+- **Firebase Cloud Functions config quirks** — structuring functions so hardware, backend, and app all agree on the same project config and region
+- **Realtime state across three layers** — keeping hardware heartbeat, backend alert creation, and Flutter's Firestore listeners in sync so the app always reflects live device/alert status
+- **Handling failure gracefully** — deciding what happens when no trigger word is detected, when uploads fail, or when the device goes offline, without silently dropping an alert
 
 ---
 
