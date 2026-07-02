@@ -2,7 +2,7 @@
 
 # 🛡️ SheAlert
 
-<img src="assets/app_icon.png" alt="SheAlert App Icon" width="120"/>
+<img src="she_alert_app/assets/icon/app_icon.png" alt="SheAlert App Icon" width="120"/>
 
 ### *Your Safety, Your Control*
 
@@ -33,12 +33,12 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 
 ## ✨ 2. Features
 
-- Continuous audio monitoring with wake-word detection (trigger word: `blueberry`)
-- Automatic photo + audio evidence capture on trigger, sent via WhatsApp with location & timestamp
-- One-touch **Manual SOS** (2-second press) for fast, evidence-free alerts
-- Heartbeat-based device connectivity status (device online/offline)
-- Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete)
-- Alert history with Manual / Automatic / All filters + weekly stats
+- 🎙️ Continuous audio monitoring with wake-word detection (trigger word: `blueberry`)
+- 📸 Automatic photo + audio evidence capture on trigger, sent via WhatsApp with location & timestamp
+- 🆘 One-touch **Manual SOS** (2-second press) for fast, evidence-free alerts
+- 💓 Heartbeat-based device connectivity status (device online/offline)
+- 📇 Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete)
+- 📊 Alert history with Manual / Automatic / All filters + weekly stats
 
 ---
 
@@ -144,59 +144,20 @@ If no trigger word is found in a 5s clip, the device waits 3s before starting th
 
 ```
 SheAlert/
-├── she_alert_app/                      # Flutter mobile app
-│   ├── lib/
-│   │   ├── models/
-│   │   ├── screens/
-│   │   │   ├── home_screen.dart
-│   │   │   ├── history_screen.dart
-│   │   │   └── contacts_screen.dart
-│   │   ├── services/
-│   │   ├── theme/
-│   │   ├── widgets/
-│   │   ├── firebase_options.dart
-│   │   └── main.dart
-│   ├── android/
-│   ├── assets/
-│   ├── pubspec.yaml
-│   ├── firebase.json
-│   └── .firebaserc
-│
-├── she_alert_backend/                  # Firebase Cloud Functions
-│   ├── functions/
-│   │   └── index.js                    # processAudio, uploadPhoto, heartbeat
-│   ├── firebase.json
-│   └── .firebaserc
-│
-├── she_alert_firmware/                 # ESP32-S3 firmware
+├── she_alert_app/          # Flutter mobile app
+│   └── lib/
+│       ├── screens/        # Home, History, Contacts UI
+│       └── services/       # Firebase & API integration
+├── she_alert_backend/      # Firebase Cloud Functions
+│   └── functions/index.js  # processAudio, uploadPhoto, heartbeat
+├── she_alert_firmware/     # ESP32-S3 firmware
 │   └── shealertfirmware.ino
-│
 └── README.md
 ```
 
 ---
 
-## 📸 7. Screenshots / Demo
-
-### 📱 App
-
-| Home (Connected) | Home (Disconnected) | History | Contacts |
-|---|---|---|---|
-| _add screenshot_ | _add screenshot_ | _add screenshot_ | _add screenshot_ |
-
-### ☁️ Backend
-
-_add Firebase console / Cloud Functions logs screenshots here_
-
-### 💬 WhatsApp Notifications
-
-| Automatic Alert | Manual Alert |
-|---|---|
-| _add screenshot_ | _add screenshot_ |
-
----
-
-## 🎯 8. Key Learnings
+## 🎯 7. Key Learnings
 
 - **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio without blocking the camera/Wi-Fi tasks on the same chip
 - **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about evidence vs. speed in an emergency UX
@@ -205,7 +166,7 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ---
 
-## 🚀 9. Future Improvements
+## 🚀 8. Future Improvements
 
 - 🔐 Add user authentication (currently single-user, no login)
 - 🔋 Battery-optimized / low-power listening mode for the ESP32-S3
