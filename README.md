@@ -179,4 +179,4 @@ SheAlert/
 
 ## 🙋 Author
 
-Your Name — [GitHub](https://github.com/username)
+Thirumalai Subashree — [GitHub](https://github.com/SubashreeT24)
