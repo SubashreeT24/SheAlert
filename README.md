@@ -2,7 +2,7 @@
 
 # 🛡️ SheAlert
 
-<img src="assets/app_icon.png" alt="SheAlert App Icon" width="120"/>
+<img src="she_alert_app/assets/icon/app_icon.png" alt="SheAlert App Icon" width="120"/>
 
 ### *Your Safety, Your Control*
 
@@ -33,12 +33,12 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 
 ## ✨ 2. Features
 
-- Continuous audio monitoring with wake-word detection (trigger word: `blueberry`)
-- Automatic photo + audio evidence capture on trigger, sent via WhatsApp with location & timestamp
-- One-touch **Manual SOS** (2-second press) for fast, evidence-free alerts
-- Heartbeat-based device connectivity status (device online/offline)
-- Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete)
-- Alert history with Manual / Automatic / All filters + weekly stats
+- 🎙️ Continuous audio monitoring with wake-word detection (trigger word: `blueberry`)
+- 📸 Automatic photo + audio evidence capture on trigger, sent via WhatsApp with location & timestamp
+- 🆘 One-touch **Manual SOS** (2-second press) for fast, evidence-free alerts
+- 💓 Heartbeat-based device connectivity status (device online/offline)
+- 📇 Priority-ordered emergency contacts (up to 5, reorderable, swipe-to-delete)
+- 📊 Alert history with Manual / Automatic / All filters + weekly stats
 
 ---
 
@@ -59,6 +59,8 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 ---
 
 ## 🧩 4. System Architecture
+
+### 4.1 Component Architecture
 
 ```mermaid
 flowchart TD
@@ -95,17 +97,28 @@ flowchart TD
     class F,S,C shared
 ```
 
-### How it works
+### 4.2 Alert Flow — Automatic vs Manual
 
-| Step | What happens |
-|---|---|
-| **1. Audio Monitor** | ESP32-S3 mic continuously captures 5s ambient audio clips |
-| **2. STT + Trigger Check** | ElevenLabs converts speech to text; backend checks for "blueberry" |
-| **3. Photo Capture** *(automatic only)* | On trigger, the onboard camera captures a photo |
-| **4. Firebase Store** | Image, audio, alert type, location & timestamp are saved to Firestore/Storage |
-| **5. WhatsApp Alert** | CircuitDigest Cloud sends the alert (with evidence, for automatic mode) to all emergency contacts |
+```mermaid
+flowchart TD
+    A["🎙️ Record 5s<br/>audio clip"] --> B["Send to<br/>processAudio()"]
+    B --> C["ElevenLabs STT<br/>generates transcript"]
+    C --> D{"Trigger word<br/>'blueberry' found?"}
+    D -- No --> W["⏱️ Wait 3s"] --> A
+    D -- Yes --> E["Create alert in Firestore<br/>(type: automatic)"]
+    E --> F["📸 Capture photo"]
+    F --> G["uploadPhoto()"]
+    G --> H["Store image + audio<br/>in Firebase Storage"]
+    H --> I["Send WhatsApp alert<br/>via CircuitDigest"]
+    I --> J["✅ Contacts receive:<br/>image + audio .wav<br/>+ location + timestamp"]
 
-If no trigger word is found in a 5s clip, the device waits 3s before starting the next listening cycle. Manual mode skips straight from SOS press → GPS fix → alert, so it doesn't wait on recording, transcription, or photo upload — trading evidence for speed.
+    K["📱 Manual SOS<br/>(hold 2s)"] --> L["Get live<br/>GPS location"]
+    L --> M["Create alert in Firestore<br/>(type: manual)"]
+    M --> N["Send WhatsApp alert<br/>via CircuitDigest"]
+    N --> O["✅ Contacts receive:<br/>location + timestamp<br/>(no media, faster)"]
+```
+
+> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. If no trigger word is found in a 5s clip, the device waits 3s before starting the next recording cycle.
 
 ---
 
@@ -144,59 +157,20 @@ If no trigger word is found in a 5s clip, the device waits 3s before starting th
 
 ```
 SheAlert/
-├── she_alert_app/                      # Flutter mobile app
-│   ├── lib/
-│   │   ├── models/
-│   │   ├── screens/
-│   │   │   ├── home_screen.dart
-│   │   │   ├── history_screen.dart
-│   │   │   └── contacts_screen.dart
-│   │   ├── services/
-│   │   ├── theme/
-│   │   ├── widgets/
-│   │   ├── firebase_options.dart
-│   │   └── main.dart
-│   ├── android/
-│   ├── assets/
-│   ├── pubspec.yaml
-│   ├── firebase.json
-│   └── .firebaserc
-│
-├── she_alert_backend/                  # Firebase Cloud Functions
-│   ├── functions/
-│   │   └── index.js                    # processAudio, uploadPhoto, heartbeat
-│   ├── firebase.json
-│   └── .firebaserc
-│
-├── she_alert_firmware/                 # ESP32-S3 firmware
+├── she_alert_app/          # Flutter mobile app
+│   └── lib/
+│       ├── screens/        # Home, History, Contacts UI
+│       └── services/       # Firebase & API integration
+├── she_alert_backend/      # Firebase Cloud Functions
+│   └── functions/index.js  # processAudio, uploadPhoto, heartbeat
+├── she_alert_firmware/     # ESP32-S3 firmware
 │   └── shealertfirmware.ino
-│
 └── README.md
 ```
 
 ---
 
-## 📸 7. Screenshots / Demo
-
-### 📱 App
-
-| Home (Connected) | Home (Disconnected) | History | Contacts |
-|---|---|---|---|
-| _add screenshot_ | _add screenshot_ | _add screenshot_ | _add screenshot_ |
-
-### ☁️ Backend
-
-_add Firebase console / Cloud Functions logs screenshots here_
-
-### 💬 WhatsApp Notifications
-
-| Automatic Alert | Manual Alert |
-|---|---|
-| _add screenshot_ | _add screenshot_ |
-
----
-
-## 🎯 8. Key Learnings
+## 🎯 7. Key Learnings
 
 - **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio without blocking the camera/Wi-Fi tasks on the same chip
 - **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about evidence vs. speed in an emergency UX
@@ -205,7 +179,7 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ---
 
-## 🚀 9. Future Improvements
+## 🚀 8. Future Improvements
 
 - 🔐 Add user authentication (currently single-user, no login)
 - 🔋 Battery-optimized / low-power listening mode for the ESP32-S3
@@ -218,4 +192,4 @@ _add Firebase console / Cloud Functions logs screenshots here_
 
 ## 🙋 Author
 
-Your Name — [GitHub](https://github.com/username)
+Thirumalai Subashree — [GitHub](https://github.com/SubashreeT24)
