@@ -153,24 +153,7 @@ flowchart TD
 
 ---
 
-## 📁 6. Project Structure
-
-```
-SheAlert/
-├── she_alert_app/          # Flutter mobile app
-│   └── lib/
-│       ├── screens/        # Home, History, Contacts UI
-│       └── services/       # Firebase & API integration
-├── she_alert_backend/      # Firebase Cloud Functions
-│   └── functions/index.js  # processAudio, uploadPhoto, heartbeat
-├── she_alert_firmware/     # ESP32-S3 firmware
-│   └── shealertfirmware.ino
-└── README.md
-```
-
----
-
-## 🎯 7. Key Learnings
+## 🎯 6. Key Learnings
 
 - **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio without blocking the camera/Wi-Fi tasks on the same chip
 - **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about evidence vs. speed in an emergency UX
@@ -179,7 +162,7 @@ SheAlert/
 
 ---
 
-## 🚀 8. Future Improvements
+## 🚀 7. Future Improvements
 
 - 🔐 Add user authentication (currently single-user, no login)
 - 🔋 Battery-optimized / low-power listening mode for the ESP32-S3
