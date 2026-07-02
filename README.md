@@ -47,7 +47,7 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 | Layer | Technology | Purpose |
 |---|---|---|
 | **Hardware** | XIAO ESP32-S3 Sense (built-in mic + camera) | Captures audio continuously & photo on trigger |
-| **Firmware** | C++ / Arduino, ESP32-S3 SDK | Records audio, controls camera, sends heartbeat over Wi-Fi |
+| **Firmware** | C++ / Arduino (ESP32-S3) | Records audio, controls camera, sends heartbeat over Wi-Fi |
 | **Backend** | Node.js — Firebase Cloud Functions | Processes audio, manages alerts, uploads media |
 | **Speech-to-Text** | ElevenLabs STT API | Converts recorded audio to text for trigger detection |
 | **Database** | Firebase Firestore | Stores alerts (automatic/manual) & contacts |
