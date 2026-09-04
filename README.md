@@ -62,61 +62,11 @@ The system is built around one principle: **automatic mode maximizes evidence, m
 
 ### 4.1 Component Architecture
 
-```mermaid
-flowchart TD
-    subgraph AUTO["Automatic Alert — trigger word 'blueberry'"]
-        direction TB
-        A1["ESP32-S3<br/>Records audio + photo"]
-        A2["processAudio()<br/>Transcribe & check trigger"]
-        A3["uploadPhoto()<br/>Store evidence & notify"]
-        A1 --> A2 --> A3
-    end
-
-    subgraph MANUAL["Manual Alert — SOS held 2s"]
-        direction TB
-        M1["Flutter App<br/>Hold SOS button"]
-        M2["Get GPS Location<br/>Live location fix"]
-        M1 --> M2
-    end
-
-    subgraph SHARED["Shared Backend — Firebase + CircuitDigest Cloud API"]
-        direction LR
-        F[("Firestore<br/>Alerts + Contacts")]
-        S[("Storage<br/>Images + Audio")]
-        C["CircuitDigest Cloud<br/>WhatsApp Notification"]
-    end
-
-    A3 -->|"alert + evidence"| SHARED
-    M2 -->|"alert + location"| SHARED
-
-    classDef auto fill:#0f5132,stroke:#0a3d26,color:#fff
-    classDef manual fill:#7a1f1f,stroke:#5c1717,color:#fff
-    classDef shared fill:#0d3b66,stroke:#092a49,color:#fff
-    class A1,A2,A3 auto
-    class M1,M2 manual
-    class F,S,C shared
-```
+![SheAlert Component Architecture](project_images/component-architecture.svg)
 
 ### 4.2 Alert Flow — Automatic vs Manual
 
-```mermaid
-flowchart TD
-    A["🎙️ Record 5s<br/>audio clip"] --> B["Send to<br/>processAudio()"]
-    B --> C["ElevenLabs STT<br/>generates transcript"]
-    C --> D{"Trigger word<br/>'blueberry' found?"}
-    D -- No --> W["⏱️ Wait 3s"] --> A
-    D -- Yes --> E["Create alert in Firestore<br/>(type: automatic)"]
-    E --> F["📸 Capture photo"]
-    F --> G["uploadPhoto()"]
-    G --> H["Store image + audio<br/>in Firebase Storage"]
-    H --> I["Send WhatsApp alert<br/>via CircuitDigest"]
-    I --> J["✅ Contacts receive:<br/>image + audio .wav<br/>+ location + timestamp"]
-
-    K["📱 Manual SOS<br/>(hold 2s)"] --> L["Get live<br/>GPS location"]
-    L --> M["Create alert in Firestore<br/>(type: manual)"]
-    M --> N["Send WhatsApp alert<br/>via CircuitDigest"]
-    N --> O["✅ Contacts receive:<br/>location + timestamp<br/>(no media, faster)"]
-```
+![SheAlert Alert Flow — Automatic vs Manual](project_images/alert-flow.svg)
 
 > **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. If no trigger word is found in a 5s clip, the device waits 3s before starting the next recording cycle.
 
