@@ -95,3 +95,84 @@ flowchart TD
     class A1,A2,A3 auto
     class M1,M2 manual
     class F,S,C shared
+```
+
+### 4.2 Alert Flow — Automatic vs Manual
+
+```mermaid
+flowchart TD
+    A["🎙️ Record 5s<br/>audio clip"] --> B["Send to<br/>processAudio()"]
+    B --> C["ElevenLabs STT<br/>generates transcript"]
+    C --> D{"Trigger word<br/>'blueberry' found?"}
+    D -- No --> W["⏱️ Wait 3s"] --> A
+    D -- Yes --> E["Create alert in Firestore<br/>(type: automatic)"]
+    E --> F["📸 Capture photo"]
+    F --> G["uploadPhoto()"]
+    G --> H["Store image + audio<br/>in Firebase Storage"]
+    H --> I["Send WhatsApp alert<br/>via CircuitDigest"]
+    I --> J["✅ Contacts receive:<br/>image + audio .wav<br/>+ location + timestamp"]
+
+    K["📱 Manual SOS<br/>(hold 2s)"] --> L["Get live<br/>GPS location"]
+    L --> M["Create alert in Firestore<br/>(type: manual)"]
+    M --> N["Send WhatsApp alert<br/>via CircuitDigest"]
+    N --> O["✅ Contacts receive:<br/>location + timestamp<br/>(no media, faster)"]
+```
+
+> **Why two modes?** Automatic mode takes longer since it waits on audio recording, transcription, and photo upload — but produces stronger evidence. Manual mode skips all of that for near-instant delivery when every second counts. If no trigger word is found in a 5s clip, the device waits 3s before starting the next recording cycle.
+
+---
+
+## 🔩 5. Core Modules
+
+### 5.1 Hardware — XIAO ESP32-S3 Sense
+
+| Component | Detail |
+|---|---|
+| Microcontroller | ESP32-S3 (XIAO Sense variant) |
+| Microphone | Built-in PDM mic |
+| Camera | Built-in camera module |
+| Power | USB power supply |
+| Connectivity | Wi-Fi (HTTP client to Firebase Cloud Functions) |
+| Heartbeat Interval | Every 30 seconds |
+
+### 5.2 Backend — Firebase Cloud Functions
+
+| Function | Responsibility |
+|---|---|
+| `processAudio` | Receives `.wav` audio, sends to ElevenLabs STT, checks for trigger word, creates alert, stores audio in Storage, sends audio via CircuitDigest |
+| `uploadPhoto` | Receives JPEG photo, stores in Firebase Storage, links to alert, triggers WhatsApp image send via CircuitDigest |
+| `heartbeat` | Updates device "last seen" timestamp in Firestore for online/offline status |
+
+### 5.3 Mobile App — Flutter
+
+| Screen | Functionality |
+|---|---|
+| **Home** | Connection status (device + internet), live GPS location, contact count, manual SOS button |
+| **History** | Alert log filtered by Manual / Automatic / All, with total alerts & this-week stats |
+| **Contacts** | Add, reorder (priority 1–5), and remove (swipe-to-delete with confirmation) emergency contacts |
+
+---
+
+## 🎯 6. Key Learnings
+
+- **Real-time audio streaming on ESP32-S3** — capturing continuous mic audio without blocking the camera/Wi-Fi tasks on the same chip
+- **Designing for a trade-off, not just a feature** — automatic vs. manual mode forced explicit decisions about evidence vs. speed in an emergency UX
+- **Wiring third-party APIs into one pipeline** — chaining ElevenLabs STT → Firestore → Storage → CircuitDigest Cloud into a single reliable alert flow
+- **Realtime state across three layers** — keeping hardware, backend, and the Flutter app in sync via Firestore listeners
+
+---
+
+## 🚀 7. Future Improvements
+
+- 🔐 Add user authentication (currently single-user, no login)
+- 🔋 Battery-optimized / low-power listening mode for the ESP32-S3
+- 🗣️ On-device wake-word detection to reduce cloud STT calls
+- 🌐 Offline SMS fallback when there's no internet connectivity
+- 🧭 Geofencing-based automatic alerts (e.g., unsafe zone detection)
+- 📈 Analytics dashboard for alert trends over time
+
+---
+
+## 🙋 Author
+
+Thirumalai Subashree — [GitHub](https://github.com/SubashreeT24)
